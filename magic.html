@@ -39,6 +39,7 @@
         var optShowTags = false;
         var debugPreserveFilesOnRefresh = false;
         var debugPreservedFiles = [];
+        const zeroStyle = 'Default'
 
         function getMsecFromAssTimeString(str) {
             var match = str.match(/^(\d+):(\d+):(\d+(\.\d+)?)$/i);
@@ -104,12 +105,12 @@
             return str.replace(/(\{[^{}]*\\(pos|move|org|fr|k|K)[^{}]*\})(.*)$/g, '$1<span class="positioned_text">$3</span>');
         }
         
-        function getLineAlignment(line) {
+        function getLineAlignment(line, styleFields) {
             var match = line.text.match(/\{[^{}]*\\an(\d)/);
             if(match)
                 return parseInt(match[1]);
-            else if(line.styleFields && line.styleFields['Alignment'])
-                return parseInt(line.styleFields['Alignment']);
+            else if(styleFields && styleFields['Alignment'])
+                return parseInt(styleFields['Alignment']);
             else
                 return 2;
         }
@@ -124,70 +125,75 @@
                 return args[parseFloat(matchIndex)+1];
             });
         }
-        
-        function getCookie(name, defaultValue) {
-            var cookies = document.cookie.split(';');
-            for(var i=0; i<cookies.length; ++i) {
-                var pair = cookies[i].split('=', 2);
-                if(pair[0]==name)
-                    return pair[1];
-            }
-            return defaultValue;
-        }
 
-        function setCookie(name, value) {
-            document.cookie = name+'='+value;
+        function expandAlias(actor) {
+            return actor;
         }
         
         function parseAssFile(str) {
-            var lines = str.replace(/\r/g, '').split('\n');
-            var parsedFile = {lines: [], styles: {}};
+            var lines = [];
+            var styles = {};
             var format = [];
-            for(var i=0; i<lines.length; ++i) {
-                var matchFormat = lines[i].match(/^Format: (.*)$/i);
+            str.replace(/\r/g, '').split('\n').forEach(function(currLine) {
+                const matchFormat = currLine.match(/^Format: (.*)$/i);
                 if(matchFormat)
                     format = matchFormat[1].split(',').map(function(field) {return field.trim();});
-                var matchStyle = lines[i].match(/^Style: (.*)$/i);
+                const matchStyle = currLine.match(/^Style: (.*)$/i);
                 if(matchStyle) {
                     var style = {};
                     matchStyle[1].split(',').forEach(function(value, index) {style[format[index]] = value;});
                     if(style['Name'])
-                        parsedFile.styles[style['Name']] = style;
+                        styles[style['Name']] = style;
                 }
-                var match = lines[i].match(/^Dialogue: ?\d+,(\d+:\d+:\d+\.\d+),(\d+:\d+:\d+\.\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(.*)$/i);
+                const match = currLine.match(/^Dialogue: ?\d+,(\d+:\d+:\d+\.\d+),(\d+:\d+:\d+\.\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(([a-z]\w*:)?(.*))$/i);
                 if(match) {
-                    var line = {source: str, style: match[3], actor: match[4], text: match[5], msecStart: getMsecFromAssTimeString(match[1]), msecEnd: getMsecFromAssTimeString(match[2]), styleFields: parsedFile.styles[match[3]]};
-                    line.alignment = getLineAlignment(line);
-                    parsedFile.lines.push(line);
+                    var line = {
+                        msecStart: getMsecFromAssTimeString(match[1]),
+                        msecEnd: getMsecFromAssTimeString(match[2]),
+                        style: match[3],
+                        text: match[5],
+                    };
+                    if (line.style == zeroStyle) {
+                        if (match[4] != '') {
+                            line.style = expandAlias(match[4]);
+                        } else if (match[6]) {
+                            line.style = expandAlias(match[6].slice(0, -1));
+                            line.text = match[7].trimStart();
+                        }
+                    }
+                    line.alignment = getLineAlignment(line, styles[match[3]])
+                    lines.push(line);
                 }
-            }
-            return parsedFile;
+            });
+            return lines;
         }
 
         function parseSrtFile(str) {
-            var lineGroups = str.replace(/\r/g, '').split('\n').map(function(x) {return x.trim()}).join('\n').split(/\n\n+/).map(function(x) {return x.trim().split('\n')});
-            var parsedFile = {lines: []};
-            for(var i=0; i<lineGroups.length; ++i) {
-                var lineGroup = lineGroups[i];
-                if(lineGroup.length>=2) {
-                    var matchNumber = lineGroup[0].match(/^\d+$/);
-                    var matchTime = lineGroup[1].match(/^(\d+:\d+:\d+,\d+) +--> +(\d+:\d+:\d+,\d+)/);
+            var lines = []
+            const lineGroups = str.replace(/\r/g, '').split('\n').map(function(x) {return x.trim()}).join('\n').split(/\n\n+/).map(function(x) {return x.trim().split('\n')});
+            lineGroups.forEach(function(currGroup) {
+                if(currGroup.length>=2) {
+                    const matchNumber = currGroup[0].match(/^\d+$/);
+                    const matchTime = currGroup[1].match(/^(\d+:\d+:\d+,\d+) +--> +(\d+:\d+:\d+,\d+)/);
                     if(matchNumber && matchTime) {
-                        var text = lineGroup.slice(2).join('\\N');
-                        var line = {source: lineGroup.join('\n'), style: 'Default', text: text, msecStart: getMsecFromSrtTimeString(matchTime[1]), msecEnd: getMsecFromSrtTimeString(matchTime[2]), styleFields: null};
-                        line.alignment = 2;
-                        parsedFile.lines.push(line);
+                        lines.push({
+                            msecStart: getMsecFromSrtTimeString(matchTime[1]),
+                            msecEnd: getMsecFromSrtTimeString(matchTime[2]),
+                            style: zeroStyle,
+                            text: currGroup.slice(2).join('\\N'),
+                            alignment: 2
+                        });
                     }
                 }
-            }
-            return parsedFile;
+            });
+            return lines;
         }
         
         function evaluateSortedParsedLines() {
             var allParsedLines = [];
             for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
-                for(var iLine = 0; iLine<parsedFiles[iFile].lines.length; ++iLine) {
-                    var parsedLine = parsedFiles[iFile].lines[iLine];
+                for(var iLine = 0; iLine<parsedFiles[iFile].length; ++iLine) {
+                    var parsedLine = parsedFiles[iFile][iLine];
                     parsedLine.fileIndex = iFile;
                     parsedLine.lineIndex = iLine;
                     allParsedLines.push(parsedLine);
@@ -306,7 +312,7 @@
                     names.push([]);
                     for(var iiLine = 0; iiLine<cell.length; ++iiLine) {
                         var iLine = cell[iiLine];
-                        var parsedLine = parsedFiles[iFile].lines[iLine];
+                        var parsedLine = parsedFiles[iFile][iLine];
                         var text = highlightAssPositionedText(removeAssDrawing(parsedLine.text));
                         if(!optShowTags)
                             text = removeAssTags(text);
@@ -352,7 +358,7 @@
             var textColumnWidthInPercents = Math.floor(100*(100-nameColumnWidthInPercents)/parsedFiles.length)/100;
             result += '\r\n    <tr><td style="width: 4em;"></td><td style="width: '+nameColumnWidthInPercents+'%;"></td>';
             for(var iFile = 0; iFile<parsedFiles.length; ++iFile) 
-                result += '<td style="width: '+textColumnWidthInPercents+'%;"><b>'+escapeHtml(parsedFiles[iFile].filename).replace(/(_|\[)/g, '<wbr>$1')+'</b>'+/*'<br/><small>('+parsedFiles[iFile].fileSize+' байт, '+parsedFiles[iFile].lines.length+' строк)<br/>&nbsp;</small>'+*/'</td>';
+                result += '<td style="width: '+textColumnWidthInPercents+'%;"><b>'+escapeHtml(parsedFiles[iFile].filename).replace(/(_|\[)/g, '<wbr>$1')+'</b>'+/*'<br/><small>('+parsedFiles[iFile].fileSize+' байт, '+parsedFiles[iFile].length+' строк)<br/>&nbsp;</small>'+*/'</td>';
             result += '</tr>';
             for(var iRow = 0; iRow<rowStrings.length; ++iRow) {
                 result += '\r\n    <tr><td style="width: 4em;">'+rowStrings[iRow][0]+'</td><td style="width: '+nameColumnWidthInPercents+'%;"><b>'+rowStrings[iRow][1]+':</b></td>';
@@ -392,7 +398,7 @@
             var max_time = 0;
             for(var iFile = 0; iFile<parsedFiles.length; ++iFile) {
                 result += formatString('\r\n    <div class="cl_sub" style="top:{0}px;left:{1}px;width:{2}px;height:{3}px;border:0px;font-weight:bold;" title="{4}"><div class="cl_sub_inner"><div class="cl_sub_inner2">{5}</div></div></div>', 0, 65+label_indent+iFile*(label_width+label_indent), label_width, 60, '', escapeHtml(parsedFiles[iFile].filename).replace(/(_|\[)/g, '<wbr>$1'));
-                var lines =  parsedFiles[iFile].lines.slice(0);
+                var lines =  parsedFiles[iFile].slice(0);
                 lines.sort(function(line1, line2) {
                     return line1.msecStart<line2.msecStart?-1:line1.msecStart>line2.msecStart?1:line1.msecEnd<line2.msecEnd?-1:line1.msecEnd>line2.msecEnd?1:line1.alignment<line2.alignment?-1:line1.alignment>line2.alignment?1:0;
                 });
