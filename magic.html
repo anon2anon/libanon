@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <style>
+        body {font-family: sans-serif; color: #444; font-size: 15px;}
+        .mode_selection {font-size: 18px;}
+        .drop_zone {font-size: 18px; text-align: center; line-height: 75px; border: 3px dashed #ccc;}
+        .drop_zone, div#result {width: 80%; margin: 25px auto;}
+        #show_tags_checkbox_div {margin: 12px auto;}
+        #select_result_button_div {font-size: 18px; text-align: center; width: 100%; margin: 20px auto 10px auto;}
+        #select_result_button {text-decoration: none; border-bottom: 1px dashed;}
+        #download_button_div {font-size: 18px; text-align: center; width: 100%; margin: 20px auto 10px auto;}
+        #download_button {text-decoration: none; border-bottom: 1px dashed;}
+        #show_tags_checkbox_div.zero_height, #select_result_button_div.zero_height, #download_button_div.zero_height {visibility: hidden; height: 0px; margin: 0px;}
+        .result_for_pad {vertical-align: top; padding: 7px 5px;}
+        .comparison_table {width:100%; table-layout:fixed; word-wrap: break-word;}
+        .comparison_table td {vertical-align: top; padding: 7px 5px;}
+        
+        .positioned_text {color:peru;}
+        .ass_tags {color:#c3c3c3;}
+        .non_bottom_center_text {color:royalblue;}
+
+        .incompatible_browser_body>* {display: none;}
+        .incompatible_browser_body>.incompatible_browser {display: block; line-height: 75px; text-align: center; font-size: 25px;}
+        .incompatible_browser {display: none;}
+        
+        div.cl_sub, div.cl_sub *, div.cl_timeline, div.cl_time{font-size:14px;font-family:arial,helvetica,verdana,tahoma,sans-serif;color:#222222;border-color:#CCCCCC;border-width:1px;padding-top:1px;padding-left:2px;padding-right:2px;position:absolute;line-height:normal;}
+        div.cl_sub{border-style:solid;position:absolute;padding:0px 0px;border-radius:4px;}
+        div.cl_sub_inner{width:100%;margin:0px 0px;padding:0px 0px;text-align:left;position:absolute;top:50%;-webkit-transform:translate(0, -50%);transform:translate(0, -50%);color:inherit;}
+        div.cl_sub_inner2{position:static;padding:0px 6px;color:inherit;}
+        div.cl_timeline{border-right-style:solid;border-top-style:solid;}
+        div.cl_time{color:#999999;text-align:right;border-style:none;}
+    </style>
+    <script>
+        var numDroppedFiles = 0;
+        var parsedFiles = [];
+        var optShowTags = false;
+        var debugPreserveFilesOnRefresh = false;
+        var debugPreservedFiles = [];
+
+        function getMsecFromAssTimeString(str) {
+            var match = str.match(/^(\d+):(\d+):(\d+(\.\d+)?)$/i);
+            return match ? Math.round((parseFloat(match[1])*3600+parseFloat(match[2])*60+parseFloat(match[3]))*1000) : null;
+        }
+
+        function getMsecFromSrtTimeString(str) {
+            var match = str.match(/^(\d+:)?(\d+:)?(\d+)(,\d+)?/);
+            if(!match)
+                return null;
+            var msec = parseFloat(match[3])*1000;
+            if(match[4])
+                msec += parseFloat('0.'+match[4].slice(1))*1000;
+            if(match[2])
+                msec += parseFloat(match[2].slice(0, -1))*60*1000;
+            if(match[1])
+                msec += parseFloat(match[1].slice(0, -1))*3600*1000;
+            return msec;
+        }
+
+        function getMinutesAndSecondsStringFromMsec(msec, padMinutesWithZeroes) {
+            var minutes = Math.floor(msec/60000);
+            var seconds = Math.floor(msec/1000)%60;
+            return ((minutes>=10||!padMinutesWithZeroes)?minutes:('0'+minutes))+':'+(seconds>=10?seconds:('0'+seconds));
+        }
+
+        function getCentisecondIntervalStringFromMsec(msecStart, msecEnd, padMinutesWithZeroes) {
+            var minutesStart = Math.floor(msecStart/60000);
+            var secondsStart = Math.floor(msecStart/1000)%60;
+            var centisecondsStart = Math.floor(msecStart/10)%100;
+            var secondsDuration = Math.floor((msecEnd-msecStart)/1000);
+            var centisecondsDuration = Math.floor((msecEnd-msecStart)/10)%100;
+            return ((minutesStart>=10||!padMinutesWithZeroes)?minutesStart:('0'+minutesStart))+':'+
+                (secondsStart>=10?secondsStart:('0'+secondsStart))+'.'+
+                (centisecondsStart>=10?centisecondsStart:('0'+centisecondsStart))+','+
+                secondsDuration+'.'+
+                (centisecondsDuration>=10?centisecondsDuration:('0'+centisecondsDuration));
+        }
+        
+        function escapeHtml(str) {
+            var elem = document.createElement('pre');
+            elem.appendChild(document.createTextNode(str));
+            return elem.innerHTML;
+        }
+        
+        function removeAssDrawing(str) {
+            return str.replace(/\{[^{}]*\\p[1-9][^{}]*\}[^{}]*(\{[^{}]*\\p0[^{}]*\}|$)/g, '');
+        }
+        
+        function removeAssPositionedText(str) {
+            return str.replace(/\{[^{}]*\\(pos|move|org|fr|k|K).*$/g, '');
+        }
+
+        function removeAssTags(str) {
+            return str.replace(/(\{[^{}]*\\[^{}]*\})/g, '');
+        }
+        
+        function highlightAssTagsAndComments(str) {
+            return str.replace(/(\{[^{}]*\}|\\N)/g, '<span class="ass_tags">$1</span>');
+        }
+        
+        function highlightAssPositionedText(str) {
+            return str.replace(/(\{[^{}]*\\(pos|move|org|fr|k|K)[^{}]*\})(.*)$/g, '$1<span class="positioned_text">$3</span>');
+        }
+        
+        function getLineAlignment(line) {
+            var match = line.text.match(/\{[^{}]*\\an(\d)/);
+            if(match)
+                return parseInt(match[1]);
+            else if(line.styleFields && line.styleFields['Alignment'])
+                return parseInt(line.styleFields['Alignment']);
+            else
+                return 2;
+        }
+
+        function formatString(str) {
+            var args = arguments;
+            return str.replace(/\{\{|\}\}|\{(\d+)\}/g, function (matchString, matchIndex) {
+                if(matchString == "{{") 
+                    return "{";
+                if(matchString == "}}")
+                    return "}";
+                return args[parseFloat(matchIndex)+1];
+            });
+        }
+        
+        function getCookie(name, defaultValue) {
+            var cookies = document.cookie.split(';');
+            for(var i=0; i<cookies.length; ++i) {
+                var pair = cookies[i].split('=', 2);
+                if(pair[0]==name)
+                    return pair[1];
+            }
+            return defaultValue;
+        }
+
+        function setCookie(name, value) {
+            document.cookie = name+'='+value;
+        }
+        
+        function parseAssFile(str) {
+            var lines = str.replace(/\r/g, '').split('\n');
+            var parsedFile = {lines: [], styles: {}};
+            var format = [];
+            for(var i=0; i<lines.length; ++i) {
+                var matchFormat = lines[i].match(/^Format: (.*)$/i);
+                if(matchFormat)
+                    format = matchFormat[1].split(',').map(function(field) {return field.trim();});
+                var matchStyle = lines[i].match(/^Style: (.*)$/i);
+                if(matchStyle) {
+                    var style = {};
+                    matchStyle[1].split(',').forEach(function(value, index) {style[format[index]] = value;});
+                    if(style['Name'])
+                        parsedFile.styles[style['Name']] = style;
+                }
+                var match = lines[i].match(/^Dialogue: ?\d+,(\d+:\d+:\d+\.\d+),(\d+:\d+:\d+\.\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(.*)$/i);
+                if(match) {
+                    var line = {source: str, style: match[3], actor: match[4], text: match[5], msecStart: getMsecFromAssTimeString(match[1]), msecEnd: getMsecFromAssTimeString(match[2]), styleFields: parsedFile.styles[match[3]]};
+                    line.alignment = getLineAlignment(line);
+                    parsedFile.lines.push(line);
+                }
+            }
+            return parsedFile;
+        }
+
+        function parseSrtFile(str) {
+            var lineGroups = str.replace(/\r/g, '').split('\n').map(function(x) {return x.trim()}).join('\n').split(/\n\n+/).map(function(x) {return x.trim().split('\n')});
+            var parsedFile = {lines: []};
+            for(var i=0; i<lineGroups.length; ++i) {
+                var lineGroup = lineGroups[i];
+                if(lineGroup.length>=2) {
+                    var matchNumber = lineGroup[0].match(/^\d+$/);
+                    var matchTime = lineGroup[1].match(/^(\d+:\d+:\d+,\d+) +--> +(\d+:\d+:\d+,\d+)/);
+                    if(matchNumber && matchTime) {
+                        var text = lineGroup.slice(2).join('\\N');
+                        var line = {source: lineGroup.join('\n'), style: 'Default', text: text, msecStart: getMsecFromSrtTimeString(matchTime[1]), msecEnd: getMsecFromSrtTimeString(matchTime[2]), styleFields: null};
+                        line.alignment = 2;
+                        parsedFile.lines.push(line);
+                    }
+                }
+            }
+            return parsedFile;
+        }
+        
+        function evaluateSortedParsedLines() {
+            var allParsedLines = [];
+            for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
+                for(var iLine = 0; iLine<parsedFiles[iFile].lines.length; ++iLine) {
+                    var parsedLine = parsedFiles[iFile].lines[iLine];
+                    parsedLine.fileIndex = iFile;
+                    parsedLine.lineIndex = iLine;
+                    allParsedLines.push(parsedLine);
+                }
+            allParsedLines.sort(function(parsedLine1, parsedLine2) {
+                if(parsedLine1.msecStart < parsedLine2.msecStart)
+                    return -1;
+                if(parsedLine1.msecStart > parsedLine2.msecStart)
+                    return 1;
+                if(parsedLine1.fileIndex < parsedLine2.fileIndex)
+                    return -1;
+                if(parsedLine1.fileIndex > parsedLine2.fileIndex)
+                    return 1;
+                if(parsedLine1.lineIndex < parsedLine2.lineIndex)
+                    return -1;
+                if(parsedLine1.lineIndex > parsedLine2.lineIndex)
+                    return 1;
+                return 0;
+            });
+            return allParsedLines;
+        }
+
+        function evaluateRowsIgnoringIntersections() {
+            var allParsedLines = evaluateSortedParsedLines();
+            var result = [];
+            var indexInAllParsedLines = 0;
+            for(var indexInAllParsedLines = 0; indexInAllParsedLines<allParsedLines.length; ++indexInAllParsedLines) {
+                var parsedLine = allParsedLines[indexInAllParsedLines];
+                var lines = [];
+                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
+                    lines.push([]);
+                lines[parsedLine.fileIndex].push(parsedLine.lineIndex);
+                result.push(lines);
+            }
+            return result;
+        }
+
+        function evaluateRows() {
+            if(parsedFiles.length<1)
+                return null;
+            //var thresholdNonEmptyCells = 2;
+            var thresholdNonEmptyCells = parsedFiles.length;
+
+            var allParsedLines = evaluateSortedParsedLines();
+            var result = [];
+            var indexInAllParsedLines = 0;
+            while(indexInAllParsedLines<allParsedLines.length) {
+                var interval = null;
+                var lines = [];
+                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
+                    lines.push([]);
+                while(indexInAllParsedLines<allParsedLines.length) {
+                    var parsedLine = allParsedLines[indexInAllParsedLines];
+                    var fileIndex = parsedLine.fileIndex;
+                    if(interval==null)
+                        interval = {msecStart: parsedLine.msecStart, msecEnd: parsedLine.msecEnd};
+                    else if(parsedLine.msecStart>=interval.msecEnd)
+                        break;
+                    var parsedLineMsecCenter = (parsedLine.msecStart+parsedLine.msecEnd)/2;
+                    if(parsedLineMsecCenter>interval.msecEnd) {
+                        var numNonEmptyCells = lines.filter(function(elem) {return elem.length>0;}).length;
+                        if(numNonEmptyCells>=thresholdNonEmptyCells) {
+                            var nextNonEmptyCells = {};
+                            nextNonEmptyCells[parsedLine.fileIndex] = true;
+                            for(var nextIndexInAllParsedLines = indexInAllParsedLines+1; nextIndexInAllParsedLines<allParsedLines.length; ++nextIndexInAllParsedLines) {
+                                var nextParsedLine = allParsedLines[nextIndexInAllParsedLines];
+                                if(nextParsedLine.msecStart>=parsedLine.msecEnd)
+                                    break;
+                                if(nextParsedLine.fileIndex!=fileIndex && nextParsedLine.msecStart<=parsedLineMsecCenter)
+                                    nextNonEmptyCells[nextParsedLine.fileIndex] = true;
+                            }
+                            if(Object.keys(nextNonEmptyCells).length>=thresholdNonEmptyCells)
+                                break;
+                        }
+                    }
+                    lines[fileIndex].push(parsedLine.lineIndex);
+                    if(interval.msecEnd<parsedLine.msecEnd)
+                        interval.msecEnd = parsedLine.msecEnd;
+                    ++indexInAllParsedLines;
+                }
+                result.push(lines);
+            }
+            return result;
+        }
+
+        function evaluateRowStrings(ignoreIntersections, forPad) {
+            if(parsedFiles.length<1)
+                return [];
+            var result = [];
+            var rows = ignoreIntersections ? evaluateRowsIgnoringIntersections() : evaluateRows();
+            /***** Force saving of english timing, by Wolfram */
+            var english_rows = [];
+            for(var iRow = 0; iRow<rows.length; ++iRow) {
+                var cell = rows[iRow][0];
+                if(cell.length>0) {
+                    rows[iRow][0] = [cell[0]];
+                    english_rows.push(rows[iRow]);
+                    for(var iiLine = 1; iiLine<cell.length; ++iiLine) {
+                        english_rows.push([[cell[iiLine]]].concat(Array(parsedFiles.length - 1).fill([])));
+                    }
+                } else {
+                    english_rows.push(rows[iRow]);
+                }
+            }
+            rows = english_rows;
+            /* Force saving of english timing *****/
+            for(var iRow = 0; iRow<rows.length; ++iRow) {
+                var lines = [];
+                var names = [];
+                var namesStr = '';
+                var msecStart = null;
+                var msecEnd = null;
+                for(var iFile = 0; iFile<parsedFiles.length; ++iFile) {
+                    var cell = rows[iRow][iFile];
+                    lines.push([]);
+                    names.push([]);
+                    for(var iiLine = 0; iiLine<cell.length; ++iiLine) {
+                        var iLine = cell[iiLine];
+                        var parsedLine = parsedFiles[iFile].lines[iLine];
+                        var text = highlightAssPositionedText(removeAssDrawing(parsedLine.text));
+                        if(!optShowTags)
+                            text = removeAssTags(text);
+                        text = highlightAssTagsAndComments(text);
+                        if(parsedLine.alignment!=2)
+                            text = '<span class="non_bottom_center_text">'+text+'</span>';
+                        lines[iFile].push(text);
+                        var style = parsedLine.style;
+                        if (!forPad)
+                            style = style.replace(/ /g, '&nbsp;');
+                        if(names[iFile].indexOf(style)==-1)
+                            names[iFile].push(style);
+                        if(msecStart==null)
+                            msecStart = parsedLine.msecStart;
+                        if(msecEnd==null)
+                            msecEnd = parsedLine.msecEnd;
+                    }
+                    if(names[iFile].length>0 && namesStr.length==0) {
+                        namesStr = names[iFile].join(', ');
+                        if(iFile>0 && !forPad)
+                            namesStr = '('+namesStr+')';
+                    }
+                }
+                rowString = [];
+                if (forPad)
+                    rowString.push(getCentisecondIntervalStringFromMsec(msecStart, msecEnd, true));
+                else
+                    rowString.push(getMinutesAndSecondsStringFromMsec(msecStart, true));
+                rowString.push(namesStr);
+                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
+                    rowString.push(lines[iFile].join(' || ').replace(/(\\N|\)|\})/g, '$1<wbr>').replace(/(\\|\(|\{)/g, '<wbr>$1'));
+                result.push(rowString);
+            }
+            return result;
+        }
+        
+        function evaluateResultForComparison() {
+            var rowStrings = evaluateRowStrings(false, false);
+            if(parsedFiles.length<1)
+                return '';
+            var result = '';
+            var nameColumnWidthInPercents = Math.min(10, 100/(parsedFiles.length+1));
+            var textColumnWidthInPercents = Math.floor(100*(100-nameColumnWidthInPercents)/parsedFiles.length)/100;
+            result += '\r\n    <tr><td style="width: 4em;"></td><td style="width: '+nameColumnWidthInPercents+'%;"></td>';
+            for(var iFile = 0; iFile<parsedFiles.length; ++iFile) 
+                result += '<td style="width: '+textColumnWidthInPercents+'%;"><b>'+escapeHtml(parsedFiles[iFile].filename).replace(/(_|\[)/g, '<wbr>$1')+'</b>'+/*'<br/><small>('+parsedFiles[iFile].fileSize+' байт, '+parsedFiles[iFile].lines.length+' строк)<br/>&nbsp;</small>'+*/'</td>';
+            result += '</tr>';
+            for(var iRow = 0; iRow<rowStrings.length; ++iRow) {
+                result += '\r\n    <tr><td style="width: 4em;">'+rowStrings[iRow][0]+'</td><td style="width: '+nameColumnWidthInPercents+'%;"><b>'+rowStrings[iRow][1]+':</b></td>';
+                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
+                    result += '<td style="width: '+textColumnWidthInPercents+'%;">'+rowStrings[iRow][iFile+2]+'</td>';
+                result += '</tr>';
+            }
+            return '\r\n<table class="comparison_table">'+result+'\r\n</table>\r\n';
+        }
+        
+        function evaluateResultForPad() {
+            var rowStrings = evaluateRowStrings(parsedFiles.length==1, true);
+            if(parsedFiles.length<1)
+                return '';
+            var result = '';
+            for(var iRow = 0; iRow<rowStrings.length; ++iRow) {
+                if(iRow) {
+                    result += '\r\n';
+                }
+                result += rowStrings[iRow][0]+'&nbsp;<b>'+rowStrings[iRow][1]+':</b>&nbsp;';
+                for(var iFile = 0; iFile<parsedFiles.length; ++iFile) {
+                    var text = rowStrings[iRow][iFile+2].replace(/\\N/g, ' ↲ ');
+                    result += text+(iFile==0?'&nbsp;→&nbsp;':iFile<parsedFiles.length-1?'&nbsp;//&nbsp;':'');
+                }
+                result += '<br/>';
+            }
+            return '<div class="result_for_pad">'+result+'</div>';
+        }
+        
+        function evaluateResultForTimeline() {
+            if(parsedFiles.length<1)
+                return '';
+            var result = '';
+            var pixels_per_second = 20;
+            var label_width = 270;
+            var label_indent = 30;
+            var max_time = 0;
+            for(var iFile = 0; iFile<parsedFiles.length; ++iFile) {
+                result += formatString('\r\n    <div class="cl_sub" style="top:{0}px;left:{1}px;width:{2}px;height:{3}px;border:0px;font-weight:bold;" title="{4}"><div class="cl_sub_inner"><div class="cl_sub_inner2">{5}</div></div></div>', 0, 65+label_indent+iFile*(label_width+label_indent), label_width, 60, '', escapeHtml(parsedFiles[iFile].filename).replace(/(_|\[)/g, '<wbr>$1'));
+                var lines =  parsedFiles[iFile].lines.slice(0);
+                lines.sort(function(line1, line2) {
+                    return line1.msecStart<line2.msecStart?-1:line1.msecStart>line2.msecStart?1:line1.msecEnd<line2.msecEnd?-1:line1.msecEnd>line2.msecEnd?1:line1.alignment<line2.alignment?-1:line1.alignment>line2.alignment?1:0;
+                });
+                for(var iLine = 0; iLine<lines.length; ++iLine) {
+                    var parsedLine = lines[iLine];
+                    var text = removeAssDrawing(removeAssPositionedText(parsedLine.text)).replace(/\{[^{}]*\}/g, '').replace(/\\N/g, '<br/>').trim();
+                    while(iLine+1<lines.length && lines[iLine+1].msecStart==parsedLine.msecStart && lines[iLine+1].msecEnd==parsedLine.msecEnd && lines[iLine+1].alignment==parsedLine.alignment) {
+                        iLine += 1;
+                        var lineText = removeAssDrawing(removeAssPositionedText(lines[iLine].text)).replace(/\{[^{}]*\}/g, '').replace(/\\N/g, '<br/>').trim();
+                        if(text && lineText)
+                            text += '<br/>';
+                        text += lineText;
+                    }
+                    max_time = Math.max(max_time, parsedLine.msecEnd);
+                    var pos_top = Math.floor(parsedLine.msecStart*pixels_per_second/1000);
+                    var pos_bottom = Math.floor(parsedLine.msecEnd*pixels_per_second/1000);
+                    if(text) {
+                        var cssStyle = formatString('top:{0}px;left:{1}px;width:{2}px;height:{3}px;', pos_top+80, 65+label_indent+iFile*(label_width+label_indent), label_width, pos_bottom-pos_top-1);
+                        if(parsedLine.alignment!=2)
+                            cssStyle += 'z-index:-1;color:lightskyblue;';
+                        result += formatString('\r\n    <div class="cl_sub" style="{0}" title="{1}"><div class="cl_sub_inner"><div class="cl_sub_inner2">{2}</div></div></div>', cssStyle, parsedLine.style, text);
+                    }
+                }
+            }
+            var time_start = 0;
+            var time_step = 5;
+            var time_interval = 1;
+            while(time_start*1000<max_time) {
+                var pos_top = Math.floor(time_start*pixels_per_second);
+                var pos_height = Math.floor((time_start+time_interval)*pixels_per_second)-pos_top-1;
+                var pos_left = 63;
+                if(time_start%time_step==0) {
+                    result += formatString('\r\n    <div class="cl_time" style="top:{0}px;left:{1}px;width:{2}px;height:{3}px;line-height:{4}px">{5}</div>', pos_top+80-pos_height/2, 12, 30, pos_height, pos_height, getMinutesAndSecondsStringFromMsec(time_start*1000, false));
+                    pos_left = 58;
+                }
+                result += formatString('\r\n    <div class="cl_timeline" style="top:{0}px;left:{1}px;width:{2}px;height:{3}px"></div>', pos_top+80, pos_left, 65-pos_left, pos_height);
+                time_start += time_interval;
+            }
+            return '<div style="position: relative;">'+result+'</div>';
+        }
+        
+        function showError(message) {
+            document.getElementById('result').innerHTML = '<div style="color: #f00; font-size: 18px;">Error: '+escapeHtml(message)+'</div>';
+        }
+        
+        function updateResult() {
+            try {
+                var radio = document.querySelector('input[type="radio"][name="group_mode"]:checked');
+                optShowTags = document.getElementById('show_tags_checkbox').checked;
+                localStorage.setItem('viewmode', radio.value);
+                localStorage.setItem('optShowTags', optShowTags);
+                //document.getElementById('mode_specific').className = radio ? radio.value : '';
+                document.getElementById('show_tags_checkbox_div').className = radio && (radio.value=='mode_pad' || radio.value=='mode_comparison') ? '' : 'zero_height';
+                document.getElementById('select_result_button_div').className = radio && radio.value=='mode_pad' && parsedFiles.length>0 ? '' : 'zero_height';
+                document.getElementById('download_button_div').className = radio && radio.value!='mode_pad' && parsedFiles.length>0 ? '' : 'zero_height';
+                if(parsedFiles.length<1)
+                    document.getElementById('result').innerHTML = ''/*'Результат появится здесь'*/;
+                else if(radio && radio.value=='mode_comparison')
+                    document.getElementById('result').innerHTML = evaluateResultForComparison();
+                else if(radio && radio.value=='mode_pad')
+                    document.getElementById('result').innerHTML = evaluateResultForPad();
+                else if(radio && radio.value=='mode_timeline')
+                    document.getElementById('result').innerHTML = evaluateResultForTimeline();
+                else
+                    document.getElementById('result').innerHTML = '';
+            }
+            catch(error) {
+                showError(error.message);
+            }
+        }
+        
+        function selectResult() {
+            var range = document.createRange();
+            range.selectNodeContents(document.getElementById('result'));
+            var selection = window.getSelection();            
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+
+        function downloadResult() {
+            var contents = '<!DOCTYPE html>\n<html>\n<head>\n    <meta charset="utf-8">\n';
+            contents += '    <style>\n'+document.getElementsByTagName('style')[0].innerHTML+'\n    </style>\n';
+            contents += '    <body>\n    <div id="result">'+document.getElementById('result').innerHTML+'\n    </div>\n    </body>\n</html>';
+            var blob = new Blob([contents], {'type': 'application/octet-stream'});
+            var linkElement = document.createElement('a');
+            linkElement.href = window.URL.createObjectURL(blob);
+            linkElement.download = 'comparison.html';
+            var clickEvent = document.createEvent('MouseEvents');
+            clickEvent.initEvent('click', true, true);
+            linkElement.dispatchEvent(clickEvent);
+        }
+
+        function onDragOver(evt) {
+            evt.stopPropagation();
+            evt.preventDefault();
+            evt.dataTransfer.dropEffect = 'copy';
+        }
+
+        function onFileDrop(evt) {
+            if(evt.currentTarget.id!='drop_zone')
+                return;
+            evt.stopPropagation();
+            evt.preventDefault();
+            var readerOnLoad = function(file) {return function(e) {
+                try {
+                    var parsedFile = file.name.slice(-4).toLowerCase()=='.srt' ? parseSrtFile(e.target.result) : parseAssFile(e.target.result);
+                    parsedFile.filename = file.name;
+                    parsedFile.fileSize = file.size;
+                    parsedFiles.push(parsedFile);
+                    if(debugPreserveFilesOnRefresh)
+                        debugPreservedFiles.push({text: e.target.result, filename: parsedFile.filename, fileSize: parsedFile.fileSize});
+                    if(parsedFiles.length==numDroppedFiles) {
+                        if(debugPreserveFilesOnRefresh)
+                            localStorage.setItem('debugPreservedFiles', JSON.stringify(debugPreservedFiles));
+                        updateResult();
+                    }
+                }
+                catch(error) {
+                    showError(error.message);
+                }
+            }};
+            try {
+                var files = evt.dataTransfer.files;
+                for(var iDroppedFile = 0; iDroppedFile<evt.dataTransfer.files.length; ++iDroppedFile) {
+                    var reader = new FileReader();
+                    ++numDroppedFiles;
+                    reader.onload = readerOnLoad(files[iDroppedFile]);
+                    reader.readAsText(files[iDroppedFile]);
+                }
+            }
+            catch(error) {
+                showError(error.message);
+            }
+        }
+        
+        function onDocumentLoad(evt) {
+            document.getElementById('drop_zone').addEventListener('dragover', onDragOver, false);
+            document.getElementById('drop_zone').addEventListener('drop', onFileDrop, false);
+            document.getElementById('select_result_button').addEventListener('click', selectResult, false);
+            document.getElementById('download_button').addEventListener('click', downloadResult, false);
+            var radios = document.querySelectorAll('input[type="radio"][name="group_mode"]');
+            var radioToSelect = document.querySelector('input[type="radio"][name="group_mode"][value="'+(localStorage.getItem('viewmode')||'mode_pad')+'"]');
+            if(radioToSelect)
+                radioToSelect.checked = true;
+            for(var iRadio = 0; iRadio<radios.length; ++iRadio)
+                radios[iRadio].addEventListener('click', updateResult, false);
+            var checkboxShowTags = document.getElementById('show_tags_checkbox');
+            checkboxShowTags.addEventListener('click', updateResult, false);
+            checkboxShowTags.checked = localStorage.getItem('optShowTags')=='true';
+            if(debugPreserveFilesOnRefresh) {
+                debugPreservedFiles = JSON.parse(localStorage.getItem('debugPreservedFiles')||'[]');
+                for(var iFile = 0; iFile<debugPreservedFiles.length; ++iFile) {
+                    ++numDroppedFiles;
+                    var parsedFile = debugPreservedFiles[iFile].filename.slice(-4).toLowerCase()=='.srt' ? parseSrtFile(debugPreservedFiles[iFile].text) : parseAssFile(debugPreservedFiles[iFile].text);
+                    parsedFile.filename = debugPreservedFiles[iFile].filename;
+                    parsedFile.fileSize = debugPreservedFiles[iFile].fileSize;
+                    parsedFiles.push(parsedFile);
+                }
+            }
+            updateResult();
+            document.body.classList.remove('incompatible_browser_body');
+        }
+
+        if(document.addEventListener && window.FileReader) {
+            document.addEventListener("DOMContentLoaded", onDocumentLoad, false);
+        }
+    </script>
+</head>
+<body class="incompatible_browser_body">
+<div class="incompatible_browser">...</div>
+<div class="drop_zone" id="drop_zone">Перетащите файлы субтитров сюда</div>
+<div class="mode_selection" style="overflow:hidden;">
+    <div style="float: left; position: relative; left: 50%;">
+        <div style="float: left; position: relative; right: 50%;">
+            <form name="options_form" method="get" action="" onsubmit="return false;">
+                <label><input type="radio" name="group_mode" value="mode_pad" checked/> Перенос в пад</label><br/>
+                <label><input type="radio" name="group_mode" value="mode_comparison"/> Сравнение</label><br/>
+                <label><input type="radio" name="group_mode" value="mode_timeline"/> Таймлайн</label><br/>
+            </form>
+            <div id="mode_specific">
+                <div id="show_tags_checkbox_div" class="zero_height">
+                    <label><input type="checkbox" id="show_tags_checkbox"/>Показывать теги</input></label>
+                </div>
+                <div id="select_result_button_div" class="zero_height">
+                    <a href="javascript:void(0)" id="select_result_button">Выделить всё</a>
+                </div>
+                <div id="download_button_div" class="zero_height">
+                    <a href="javascript:void(0)" id="download_button">Скачать</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="result"></div>
+</body>
+</html>
