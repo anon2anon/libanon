@@ -36,6 +36,8 @@
     <script>
         var numDroppedFiles = 0;
         var parsedFiles = [];
+        var aliases = {};
+        var aliasesLoaded = false;
         var optShowTags = false;
         var debugPreserveFilesOnRefresh = false;
         var debugPreservedFiles = [];
@@ -126,7 +128,22 @@
             });
         }
 
+        function setAliases(text) {
+            text.replace(/\r/g, '').split('\n').forEach(function(line) {
+                const split = line.split(':');
+                if (split.length == 2) {
+                    aliases[split[0].trim()] = split[1].trim();
+                }
+            });
+            aliasesLoaded = true;
+        }
+
         function expandAlias(actor) {
+            if (!aliasesLoaded)
+                return actor;
+            const style = aliases[actor];
+            if (style)
+                return style;
             return actor;
         }
         
@@ -561,6 +578,10 @@
             updateResult();
             document.body.classList.remove('incompatible_browser_body');
         }
+
+        fetch('aliases.txt')
+            .then(x => x.text())
+            .then(text => setAliases(text));
 
         if(document.addEventListener && window.FileReader) {
             document.addEventListener("DOMContentLoaded", onDocumentLoad, false);
