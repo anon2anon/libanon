@@ -2,7 +2,7 @@
 #include <iostream>
 #include <vector>
 
-const size_t MERGE_LIMIT = 4;
+const size_t MERGE_LIMIT = 3;
 
 struct Line {
     int start = 0;
@@ -52,78 +52,71 @@ struct Line {
     }
 };
 
+using File = std::vector<Line>;
 using Cell = std::vector<Line>;
 using Box = std::vector<Cell>;
 
-std::vector<Box> initPivotBoxes(const std::vector<Line>& pivot, int totalFiles, int pivotFile) {
+std::vector<Box> initPivotBoxes(const File& pivotFile, int totalFiles, int pivotIdx) {
     std::vector<Box> boxes;
-    boxes.reserve(pivot.size());
-    for (const auto& line : pivot) {
+    boxes.reserve(pivotFile.size());
+    for (const auto& line : pivotFile) {
         Box box(totalFiles);
-        box[pivotFile].push_back(line);
+        box[pivotIdx].push_back(line);
         boxes.emplace_back(std::move(box));
     }
     return boxes;
 }
 
-std::vector<Box> boxLines(const std::vector<std::vector<Line>>& files, int depth = 0) {
+std::vector<Box> boxLines(const std::vector<File>& files) {
     const int totalFiles = files.size();
-    int pivotFile;  // First non-empty file
-    for (pivotFile = 0; pivotFile < totalFiles; ++pivotFile) {
-        if (!files[pivotFile].empty()) {
+    int pivotIdx;  // First non-empty file
+    for (pivotIdx = 0; pivotIdx < totalFiles; ++pivotIdx) {
+        if (!files[pivotIdx].empty()) {
             break;
         }
     }
-    if (pivotFile == totalFiles) {
+    if (pivotIdx == totalFiles) {
         // All files empty
         return {};
     }
 
-    const std::vector<Line>& pivot = files[pivotFile];
-    const int pivotSize = pivot.size();
-    int currIdx = 0;
+    const std::vector<Line>& pivotFile = files[pivotIdx];
+    const int pivotSize = pivotFile.size();
+    int currIdx;
     const Line* prev;
     const Line* curr;
-    const Line* next;
     auto updatePointers = [&](){
-        prev = currIdx > 0             ? &pivot[currIdx - 1] : nullptr;
-        curr = currIdx < pivotSize     ? &pivot[currIdx    ] : nullptr;
-        next = currIdx + 1 < pivotSize ? &pivot[currIdx + 1] : nullptr;
+        prev = currIdx > 0 ? &pivotFile[currIdx - 1] : nullptr;
+        curr = currIdx < pivotSize ? &pivotFile[currIdx] : nullptr;
     };
 
-    std::vector<Box> pivotBoxes = initPivotBoxes(pivot, totalFiles, pivotFile);
+    std::vector<Box> pivotBoxes = initPivotBoxes(pivotFile, totalFiles, pivotIdx);
     std::vector<Box> inBetween(pivotSize + 1);
-    for (int iFile = pivotFile + 1; iFile < totalFiles; ++iFile) {
-        auto setBetween = [&](int iBox, const Line& line) {
-            Box& box = inBetween[iBox];
-            if (box.empty()) {
-                box.resize(totalFiles);
-            }
-            box[iFile].push_back(line);
-        };
-        auto setPivot = [&](int iBox, const Line& line) {
-            auto& cell = pivotBoxes[iBox][iFile];
-            cell.push_back(line);
-            if (cell.size() >= MERGE_LIMIT) {
-                prev = nullptr;
-            }
-        };
+    for (int iFile = pivotIdx + 1; iFile < totalFiles; ++iFile) {
         currIdx = 0;
         updatePointers();
         for (const auto& line : files[iFile]) {
             while (true) {
-                int dir = curr ? line.direction(*curr) : -1;
+                const int dir = curr ? line.direction(*curr) : -1;
                 if (dir == -1) {
-                    if (prev && !line.direction(*prev)) {
-                        setPivot(currIdx - 1, line);
+                    if (prev && line.direction(*prev) != 1) {
+                        Cell& cell = pivotBoxes[currIdx - 1][iFile];
+                        cell.push_back(line);
+                        if (cell.size() >= MERGE_LIMIT) {
+                            prev = nullptr;
+                        }
                     } else {
+                        Box& box = inBetween[currIdx];
+                        if (box.empty()) {
+                            box.resize(totalFiles);
+                        }
+                        box[iFile].push_back(line);
                         prev = nullptr;
-                        setBetween(currIdx, line);
                     }
                     break;
                 }
                 if (dir == 0) {
-                    setPivot(currIdx, line);
+                    pivotBoxes[currIdx][iFile].push_back(line);
                     ++currIdx;
                     updatePointers();
                     break;
@@ -137,7 +130,7 @@ std::vector<Box> boxLines(const std::vector<std::vector<Line>>& files, int depth
 
     std::vector<Box> boxes;
     for (int iBox = 0; iBox <= pivotSize; ++iBox) {
-        auto inb = boxLines(inBetween[iBox], depth + 1);
+        auto inb = boxLines(inBetween[iBox]);
         boxes.insert(boxes.end(), std::make_move_iterator(inb.begin()), std::make_move_iterator(inb.end()));
         if (iBox != pivotSize) {
             boxes.emplace_back(std::move(pivotBoxes[iBox]));
@@ -167,7 +160,7 @@ void printBoxing(const std::vector<Box>& boxes) {
     std::cout << std::flush;
 }
 
-int main() {
+int main(int argc, char** argv) {
     int numFiles;
     std::cin >> numFiles;
     std::vector<std::vector<Line>> files;
