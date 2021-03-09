@@ -139,6 +139,73 @@ std::vector<Box> boxLines(const std::vector<File>& files) {
     return boxes;
 }
 
+std::pair<int, int> cellRange(const Cell& cell) {
+    int minStart = cell[0].start;
+    int maxEnd = cell[0].end;
+    for (int iLine = 1; iLine < int(cell.size()); ++iLine) {
+        minStart = std::min(minStart, cell[iLine].start);
+        maxEnd = std::max(maxEnd, cell[iLine].end);
+    }
+    return std::make_pair(minStart, maxEnd);
+}
+
+int cellScore(const Box& box, int badCell) {
+    int worst = 0;
+    auto [badStart, badEnd] = cellRange(box[badCell]);
+    for (int iCell = 0; iCell < int(box.size()); ++iCell) {
+        if (iCell == badCell || box[iCell].empty()) {
+            continue;
+        }
+        auto [cellStart, cellEnd] = cellRange(box[iCell]);
+        worst = std::max(worst, std::abs(badStart - cellStart) + std::abs(badEnd - cellEnd));
+    }
+    return worst;
+}
+
+void tryMergeLastTwo(std::vector<Box>& boxes) {
+    const int size = boxes.size();
+    if (size < 2) {
+        return;
+    }
+    Box& first = boxes[size - 2];
+    Box& second = boxes[size - 1];
+    const int totalFiles = first.size();
+    std::vector<int> badCells;
+    for (int iCell = 0; iCell < totalFiles; ++iCell) {
+        if (first[iCell].size() + second[iCell].size() > MERGE_LIMIT) {
+            return;
+        }
+        if(!first[iCell].empty() && second[iCell].empty()) {
+            badCells.push_back(iCell);
+        }
+    }
+    if (badCells.empty()) {
+        return;
+    }
+    Box merged = first;
+    for (int iCell = 0; iCell < totalFiles; ++iCell) {
+        merged[iCell].insert(merged[iCell].end(), second[iCell].begin(), second[iCell].end());
+    }
+    for (int iCell : badCells) {
+        if (cellScore(merged, iCell) > cellScore(first, iCell)) {
+            return;
+        }
+    }
+    first = merged;
+    boxes.resize(size - 1);
+}
+
+std::vector<Box> mergeBoxes(std::vector<Box> oldBoxing) {
+    std::vector<Box> newBoxing;
+    auto it = std::make_move_iterator(oldBoxing.begin());
+    const auto endIt = std::make_move_iterator(oldBoxing.end());
+    for (; it != endIt; ++it) {
+        newBoxing.emplace_back(*it);
+        tryMergeLastTwo(newBoxing);
+    }
+    return newBoxing;
+}
+
 void printBoxing(const std::vector<Box>& boxes) {
     for (const auto& box : boxes) {
         const int boxSize = box.size();
@@ -180,5 +247,8 @@ int main(int argc, char** argv) {
         files.emplace_back(std::move(lines));
     }
     auto boxing = boxLines(files);
+    if (argc > 1) {
+        boxing = mergeBoxes(std::move(boxing));
+    }
     printBoxing(boxing);
 }
