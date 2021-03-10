@@ -42,6 +42,7 @@
         var debugPreserveFilesOnRefresh = false;
         var debugPreservedFiles = [];
         const zeroStyle = 'Default'
+        const mergeLimit = 3
 
         function getMsecFromAssTimeString(str) {
             const match = str.match(/^(\d+):(\d+):(\d+(\.\d+)?)$/i);
@@ -182,6 +183,13 @@
                     lines.push(line);
                 }
             });
+            lines.sort(function(line1, line2) {
+                if(line1.msecStart < line2.msecStart)
+                    return -1;
+                if(line1.msecStart > line2.msecStart)
+                    return 1;
+                return 0;
+            });
             return lines;
         }
 
@@ -203,120 +211,116 @@
                     }
                 }
             });
-            return lines;
-        }
-        
-        function evaluateSortedParsedLines() {
-            var allParsedLines = [];
-            for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
-                for(var iLine = 0; iLine<parsedFiles[iFile].length; ++iLine) {
-                    var parsedLine = parsedFiles[iFile][iLine];
-                    parsedLine.fileIndex = iFile;
-                    parsedLine.lineIndex = iLine;
-                    allParsedLines.push(parsedLine);
-                }
-            allParsedLines.sort(function(parsedLine1, parsedLine2) {
-                if(parsedLine1.msecStart < parsedLine2.msecStart)
+            lines.sort(function(line1, line2) {
+                if(line1.msecStart < line2.msecStart)
                     return -1;
-                if(parsedLine1.msecStart > parsedLine2.msecStart)
-                    return 1;
-                if(parsedLine1.fileIndex < parsedLine2.fileIndex)
-                    return -1;
-                if(parsedLine1.fileIndex > parsedLine2.fileIndex)
-                    return 1;
-                if(parsedLine1.lineIndex < parsedLine2.lineIndex)
-                    return -1;
-                if(parsedLine1.lineIndex > parsedLine2.lineIndex)
+                if(line1.msecStart > line2.msecStart)
                     return 1;
                 return 0;
             });
-            return allParsedLines;
+            return lines;
         }
 
-        function evaluateRowsIgnoringIntersections() {
-            var allParsedLines = evaluateSortedParsedLines();
-            var result = [];
-            var indexInAllParsedLines = 0;
-            for(var indexInAllParsedLines = 0; indexInAllParsedLines<allParsedLines.length; ++indexInAllParsedLines) {
-                var parsedLine = allParsedLines[indexInAllParsedLines];
-                var lines = [];
-                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
-                    lines.push([]);
-                lines[parsedLine.fileIndex].push(parsedLine.lineIndex);
-                result.push(lines);
+        // partial ordering
+        function lineCmp(line1, line2) {
+            if(line1.msecEnd <= line2.msecStart)
+                return -1;
+            if(line1.msecStart >= line2.msecEnd)
+                return 1;
+            const commonLength = Math.min(line1.msecEnd, line2.msecEnd) - Math.max(line1.msecStart, line2.msecStart);
+            if(2 * commonLength >= Math.min(line1.msecEnd - line1.msecStart, line2.msecEnd - line2.msecStart))
+                return 0;
+            if(line1.msecStart < line2.msecStart)
+                return -1;
+            return 1;
+        }
+
+        // File is a list of lines
+        // Cell is a short list of lines from one file
+        // Box is a list of cells with length equal to number of parsed files
+        // boxLines converts a list of parsed files into a list of boxes
+        function boxLines(files) {
+            if(!files)
+                return [];
+            const totalFiles = files.length;
+            var pivotIdx = 0;
+            for(pivotIdx = 0; pivotIdx < totalFiles; ++pivotIdx) {
+                if(files[pivotIdx].length)
+                    break;
             }
-            return result;
-        }
+            if(pivotIdx == totalFiles)
+                return [];  // All files empty, no boxes needed
 
-        function evaluateRows() {
-            if(parsedFiles.length<1)
-                return null;
-            //var thresholdNonEmptyCells = 2;
-            var thresholdNonEmptyCells = parsedFiles.length;
+            const pivotFile = files[pivotIdx];
+            const pivotSize = pivotFile.length;
+            var currIdx = 0;
+            var prev, curr;
+            const updateLines = function() {
+                prev = currIdx > 0 ? pivotFile[currIdx - 1] : null;
+                curr = currIdx < pivotSize ? pivotFile[currIdx] : null;
+            };
 
-            var allParsedLines = evaluateSortedParsedLines();
-            var result = [];
-            var indexInAllParsedLines = 0;
-            while(indexInAllParsedLines<allParsedLines.length) {
-                var interval = null;
-                var lines = [];
-                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
-                    lines.push([]);
-                while(indexInAllParsedLines<allParsedLines.length) {
-                    var parsedLine = allParsedLines[indexInAllParsedLines];
-                    var fileIndex = parsedLine.fileIndex;
-                    if(interval==null)
-                        interval = {msecStart: parsedLine.msecStart, msecEnd: parsedLine.msecEnd};
-                    else if(parsedLine.msecStart>=interval.msecEnd)
-                        break;
-                    var parsedLineMsecCenter = (parsedLine.msecStart+parsedLine.msecEnd)/2;
-                    if(parsedLineMsecCenter>interval.msecEnd) {
-                        var numNonEmptyCells = lines.filter(function(elem) {return elem.length>0;}).length;
-                        if(numNonEmptyCells>=thresholdNonEmptyCells) {
-                            var nextNonEmptyCells = {};
-                            nextNonEmptyCells[parsedLine.fileIndex] = true;
-                            for(var nextIndexInAllParsedLines = indexInAllParsedLines+1; nextIndexInAllParsedLines<allParsedLines.length; ++nextIndexInAllParsedLines) {
-                                var nextParsedLine = allParsedLines[nextIndexInAllParsedLines];
-                                if(nextParsedLine.msecStart>=parsedLine.msecEnd)
-                                    break;
-                                if(nextParsedLine.fileIndex!=fileIndex && nextParsedLine.msecStart<=parsedLineMsecCenter)
-                                    nextNonEmptyCells[nextParsedLine.fileIndex] = true;
-                            }
-                            if(Object.keys(nextNonEmptyCells).length>=thresholdNonEmptyCells)
-                                break;
-                        }
-                    }
-                    lines[fileIndex].push(parsedLine.lineIndex);
-                    if(interval.msecEnd<parsedLine.msecEnd)
-                        interval.msecEnd = parsedLine.msecEnd;
-                    ++indexInAllParsedLines;
+            var pivotBoxes = pivotFile.map(function(line){
+                var box = Array(totalFiles);
+                for(var iCell = 0; iCell < totalFiles; ++iCell) {
+                    if(iCell == pivotIdx)
+                        box[iCell] = [line];
+                    else
+                        box[iCell] = [];
                 }
-                result.push(lines);
+                return box;
+            });
+            var inBetween = Array(pivotSize + 1);
+            for(var iFile = pivotIdx + 1; iFile < totalFiles; ++iFile) {
+                currIdx = 0;
+                updateLines();
+                files[iFile].forEach(function(line){
+                    while(true) {
+                        const cmp = curr ? lineCmp(line, curr) : -1;
+                        if(cmp == -1) {
+                            if(prev && lineCmp(line, prev) != 1) {
+                                var cell = pivotBoxes[currIdx - 1][iFile];
+                                cell.push(line);
+                                if(cell.length >= mergeLimit)
+                                    prev = null;
+                            } else {
+                                if(!(currIdx in inBetween)) {
+                                    inBetween[currIdx] = Array(totalFiles);
+                                    for(var iCell = 0; iCell < totalFiles; ++iCell)
+                                        inBetween[currIdx][iCell] = [];
+                                }
+                                inBetween[currIdx][iFile].push(line);
+                                prev = null;
+                            }
+                            break;
+                        }
+                        if(cmp == 0) {
+                            pivotBoxes[currIdx][iFile].push(line);
+                            ++currIdx;
+                            updateLines();
+                            break;
+                        }
+                        // cmp == 1
+                        ++currIdx;
+                        updateLines();
+                    }
+                });
             }
-            return result;
+
+            var boxes = [];
+            for(var iBox = 0; iBox <= pivotSize; ++iBox) {
+                boxes.push(...boxLines(inBetween[iBox]));
+                if(iBox != pivotSize)
+                    boxes.push(pivotBoxes[iBox]);
+            }
+            return boxes;
         }
 
-        function evaluateRowStrings(ignoreIntersections, forPad) {
+        function evaluateRowStrings(forPad) {
             if(parsedFiles.length<1)
                 return [];
             var result = [];
-            var rows = ignoreIntersections ? evaluateRowsIgnoringIntersections() : evaluateRows();
-            /***** Force saving of english timing, by Wolfram */
-            var english_rows = [];
-            for(var iRow = 0; iRow<rows.length; ++iRow) {
-                var cell = rows[iRow][0];
-                if(cell.length>0) {
-                    rows[iRow][0] = [cell[0]];
-                    english_rows.push(rows[iRow]);
-                    for(var iiLine = 1; iiLine<cell.length; ++iiLine) {
-                        english_rows.push([[cell[iiLine]]].concat(Array(parsedFiles.length - 1).fill([])));
-                    }
-                } else {
-                    english_rows.push(rows[iRow]);
-                }
-            }
-            rows = english_rows;
-            /* Force saving of english timing *****/
+            var rows = boxLines(parsedFiles);
             for(var iRow = 0; iRow<rows.length; ++iRow) {
                 var lines = [];
                 var names = [];
@@ -327,9 +331,8 @@
                     var cell = rows[iRow][iFile];
                     lines.push([]);
                     names.push([]);
-                    for(var iiLine = 0; iiLine<cell.length; ++iiLine) {
-                        var iLine = cell[iiLine];
-                        var parsedLine = parsedFiles[iFile][iLine];
+                    for(var iLine = 0; iLine<cell.length; ++iLine) {
+                        var parsedLine = cell[iLine];
                         var text = highlightAssPositionedText(removeAssDrawing(parsedLine.text));
                         if(!optShowTags)
                             text = removeAssTags(text);
@@ -367,7 +370,7 @@
         }
         
         function evaluateResultForComparison() {
-            var rowStrings = evaluateRowStrings(false, false);
+            var rowStrings = evaluateRowStrings(false);
             if(parsedFiles.length<1)
                 return '';
             var result = '';
@@ -387,7 +390,7 @@
         }
         
         function evaluateResultForPad() {
-            var rowStrings = evaluateRowStrings(parsedFiles.length==1, true);
+            var rowStrings = evaluateRowStrings(true);
             if(parsedFiles.length<1)
                 return '';
             var result = '';
