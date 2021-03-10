@@ -318,93 +318,102 @@
             return boxes;
         }
 
-        function evaluateRowStrings(forPad) {
+        function mergeBoxes(boxes) {
+            return boxes;
+        }
+
+        function evaluateRows(forPad) {
             if(parsedFiles.length<1)
                 return [];
-            var result = [];
-            var rows = boxLines(parsedFiles);
-            for(var iRow = 0; iRow<rows.length; ++iRow) {
+            var allRows = [];
+            var boxes = boxLines(parsedFiles);
+            if(!forPad)
+                boxes = mergeBoxes(boxes);
+            boxes.forEach(function(box){
                 var lines = [];
-                var names = [];
                 var namesStr = '';
                 var msecStart = null;
                 var msecEnd = null;
-                for(var iFile = 0; iFile<parsedFiles.length; ++iFile) {
-                    var cell = rows[iRow][iFile];
-                    lines.push([]);
-                    names.push([]);
-                    for(var iLine = 0; iLine<cell.length; ++iLine) {
-                        var parsedLine = cell[iLine];
-                        var text = highlightAssPositionedText(removeAssDrawing(parsedLine.text));
+                box.forEach(function(cell){
+                    var cellLines = [];
+                    var cellNames = [];
+                    cell.forEach(function(line){
+                        var text = line.text;
+                        if(!optShowTags || !forPad)
+                            text = removeAssDrawing(text);
+                        text = highlightAssPositionedText(text);
                         if(!optShowTags)
                             text = removeAssTags(text);
                         text = highlightAssTagsAndComments(text);
-                        if(parsedLine.alignment!=2)
+                        if(line.alignment!=2)
                             text = '<span class="non_bottom_center_text">'+text+'</span>';
-                        lines[iFile].push(text);
-                        var style = parsedLine.style;
-                        if (!forPad)
-                            style = style.replace(/ /g, '&nbsp;');
-                        if(names[iFile].indexOf(style)==-1)
-                            names[iFile].push(style);
+                        cellLines.push(text);
+
+                        var style = line.style.replace(/ /g, '&nbsp;');
+                        if(cellNames.indexOf(style)==-1)
+                            cellNames.push(style);
+
                         if(msecStart==null)
-                            msecStart = parsedLine.msecStart;
+                            msecStart = line.msecStart;
                         if(msecEnd==null)
-                            msecEnd = parsedLine.msecEnd;
-                    }
-                    if(names[iFile].length>0 && namesStr.length==0) {
-                        namesStr = names[iFile].join(', ');
-                        if(iFile>0 && !forPad)
-                            namesStr = '('+namesStr+')';
-                    }
-                }
-                rowString = [];
+                            msecEnd = line.msecEnd;
+                    });
+                    if(cellNames.length>0 && namesStr.length==0)
+                        namesStr = cellNames.join(', ');
+                    lines.push(cellLines);
+                });
+                var row = {style: namesStr};
                 if (forPad)
-                    rowString.push(getCentisecondIntervalStringFromMsec(msecStart, msecEnd, true));
+                    row.timing = getCentisecondIntervalStringFromMsec(msecStart, msecEnd, true);
                 else
-                    rowString.push(getMinutesAndSecondsStringFromMsec(msecStart, true));
-                rowString.push(namesStr);
-                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
-                    rowString.push(lines[iFile].join(' || ').replace(/(\\N|\)|\})/g, '$1<wbr>').replace(/(\\|\(|\{)/g, '<wbr>$1'));
-                result.push(rowString);
-            }
-            return result;
+                    row.timing = getMinutesAndSecondsStringFromMsec(msecStart, true);
+                row.box = lines.map(function(cellLines){
+                    var cellText = cellLines.join(forPad ? ' ' : ' || ');
+                    if(forPad) {
+                        cellText = cellText.replace('...', '…').replace(/\s+/g, ' ').replace(/ [-‐‒–―]+ /g, ' — ')
+                    } else {
+                        cellText = cellText.replace(/(\\N|\)|\})/g, '$1<wbr>').replace(/(\\|\(|\{)/g, '<wbr>$1');
+                    }
+                    return cellText;
+                });
+                allRows.push(row);
+            });
+            return allRows;
         }
         
         function evaluateResultForComparison() {
-            var rowStrings = evaluateRowStrings(false);
             if(parsedFiles.length<1)
                 return '';
-            var result = '';
-            var nameColumnWidthInPercents = Math.min(10, 100/(parsedFiles.length+1));
-            var textColumnWidthInPercents = Math.floor(100*(100-nameColumnWidthInPercents)/parsedFiles.length)/100;
-            result += '\r\n    <tr><td style="width: 4em;"></td><td style="width: '+nameColumnWidthInPercents+'%;"></td>';
+            const rows = evaluateRows(false);
+            const nameColumnWidthInPercents = Math.min(10, 100/(parsedFiles.length+1));
+            const textColumnWidthInPercents = Math.floor(100*(100-nameColumnWidthInPercents)/parsedFiles.length)/100;
+            var result = '\r\n    <tr><td style="width: 4em;"></td><td style="width: '+nameColumnWidthInPercents+'%;"></td>';
             for(var iFile = 0; iFile<parsedFiles.length; ++iFile) 
                 result += '<td style="width: '+textColumnWidthInPercents+'%;"><b>'+escapeHtml(parsedFiles[iFile].filename).replace(/(_|\[)/g, '<wbr>$1')+'</b>'+/*'<br/><small>('+parsedFiles[iFile].fileSize+' байт, '+parsedFiles[iFile].length+' строк)<br/>&nbsp;</small>'+*/'</td>';
             result += '</tr>';
-            for(var iRow = 0; iRow<rowStrings.length; ++iRow) {
-                result += '\r\n    <tr><td style="width: 4em;">'+rowStrings[iRow][0]+'</td><td style="width: '+nameColumnWidthInPercents+'%;"><b>'+rowStrings[iRow][1]+':</b></td>';
+            for(var iRow = 0; iRow<rows.length; ++iRow) {
+                const row = rows[iRow];
+                result += '\r\n    <tr><td style="width: 4em;">'+row.timing+'</td><td style="width: '+nameColumnWidthInPercents+'%;"><b>'+row.style+':</b></td>';
                 for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
-                    result += '<td style="width: '+textColumnWidthInPercents+'%;">'+rowStrings[iRow][iFile+2]+'</td>';
+                    result += '<td style="width: '+textColumnWidthInPercents+'%;">'+row.box[iFile]+'</td>';
                 result += '</tr>';
             }
             return '\r\n<table class="comparison_table">'+result+'\r\n</table>\r\n';
         }
         
         function evaluateResultForPad() {
-            var rowStrings = evaluateRowStrings(true);
             if(parsedFiles.length<1)
                 return '';
+            const rows = evaluateRows(true);
             var result = '';
-            for(var iRow = 0; iRow<rowStrings.length; ++iRow) {
+            for(var iRow = 0; iRow<rows.length; ++iRow) {
                 if(iRow) {
                     result += '\r\n';
                 }
-                result += rowStrings[iRow][0]+'&nbsp;<b>'+rowStrings[iRow][1]+':</b>&nbsp;';
-                for(var iFile = 0; iFile<parsedFiles.length; ++iFile) {
-                    var text = rowStrings[iRow][iFile+2].replace(/\\N/g, ' ↲ ');
-                    result += text+(iFile==0?'&nbsp;→&nbsp;':iFile<parsedFiles.length-1?'&nbsp;//&nbsp;':'');
-                }
+                const row = rows[iRow];
+                result += row.timing+'&nbsp;<b>'+row.style+':</b>&nbsp;';
+                for(var iFile = 0; iFile<parsedFiles.length; ++iFile)
+                    result += row.box[iFile]+(iFile==0?'&nbsp;→&nbsp;':iFile<parsedFiles.length-1?'&nbsp;//&nbsp;':'');
                 result += '<br/>';
             }
             return '<div class="result_for_pad">'+result+'</div>';
