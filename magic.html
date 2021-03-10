@@ -180,7 +180,9 @@
                         }
                     }
                     line.alignment = getLineAlignment(line, styles[match[3]])
-                    lines.push(line);
+                    if (line.msecEnd > 0 || line.text.length > 1) {
+                        lines.push(line);
+                    }
                 }
             });
             lines.sort(function(line1, line2) {
