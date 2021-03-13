@@ -370,7 +370,7 @@
                 row.box = lines.map(function(cellLines){
                     var cellText = cellLines.join(forPad ? ' ' : ' || ');
                     if(forPad) {
-                        cellText = cellText.replace(/\.\.\./g, '…').replace(/\s+/g, ' ').replace(/ [-‐‒–―]+ /g, ' — ')
+                        cellText = cellText.replace(/\.\.\./g, '…').replace(/ [-‐‒–―]+ /g, ' — ')
                     } else {
                         cellText = cellText.replace(/(\\N|\)|\})/g, '$1<wbr>').replace(/(\\|\(|\{)/g, '<wbr>$1');
                     }
