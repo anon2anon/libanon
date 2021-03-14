@@ -318,8 +318,68 @@
             return boxes;
         }
 
+        function cellRange(cell) {
+            var range = {start: cell[0].msecStart, end: cell[0].msecEnd};
+            for(var iLine = 1; iLine < cell.length; ++iLine) {
+                range.start = Math.min(range.start, cell[iLine].msecStart);
+                range.end = Math.max(range.end, cell[iLine].msecEnd);
+            }
+            return range;
+        }
+
+        function cellScore(box, badCell) {
+            var worst = 0;
+            const bad = cellRange(box[badCell]);
+            for(var iCell = 0; iCell < box.length; ++iCell) {
+                if(iCell == badCell || !box[iCell].length)
+                    continue;
+                const range = cellRange(box[iCell]);
+                worst = Math.max(worst, Math.abs(bad.start-range.start)+Math.abs(bad.end-range.end));
+            }
+            if(typeof worst === "undefined")
+                throw "cell score is undefined";
+            return worst;
+        }
+
+        function tryMergeLastTwo(boxes) {
+            const size = boxes.length;
+            if(size < 2)
+                return;
+            var first = boxes[size - 2];
+            var second = boxes[size - 1];
+            const totalFiles = first.length;
+            var badCellIds = [];
+            for(var iCell = 0; iCell < totalFiles; ++iCell) {
+                if(first[iCell].length + second[iCell].length > mergeLimit)
+                    return;
+                if(first[iCell].length!=0 && second[iCell].length==0)
+                    badCellIds.push(iCell);
+            }
+            if(!badCellIds.length)
+                return;
+            var merged = [];
+            for(var iCell = 0; iCell < totalFiles; ++iCell) {
+                var mergedCell = first[iCell].slice();
+                mergedCell.push(...second[iCell]);
+                merged.push(mergedCell);
+            }
+            for(var iiCell = 0; iiCell < badCellIds.length; ++iiCell) {
+                const iCell = badCellIds[iiCell];
+                if(cellScore(merged, iCell) > cellScore(first, iCell))
+                    return;
+            }
+            boxes[size - 2] = merged;
+            boxes.pop();
+        }
+
         function mergeBoxes(boxes) {
-            return boxes;
+            var reboxing = [];
+            for(var iBox = 0; iBox < boxes.length; ++iBox) {
+                reboxing.push(boxes[iBox]);
+                boxes[iBox] = null;
+                tryMergeLastTwo(reboxing);
+            }
+            return reboxing;
         }
 
         function evaluateRows(forPad) {
@@ -370,7 +430,7 @@
                 row.box = lines.map(function(cellLines){
                     var cellText = cellLines.join(forPad ? ' ' : ' || ');
                     if(forPad) {
-                        cellText = cellText.replace(/\.\.\./g, '…').replace(/ [-‐‒–―]+ /g, ' — ')
+                        cellText = cellText.replace(/\.\.\./g, '…').replace(/ [-‐‒–―]+/g, ' —').replace(/[-‐‒–―]+ /g, '— ')
                     } else {
                         cellText = cellText.replace(/(\\N|\)|\})/g, '$1<wbr>').replace(/(\\|\(|\{)/g, '<wbr>$1');
                     }
