@@ -16,6 +16,7 @@ const MONKEY = true;
 // However, you can use it from console with features requiring persistent storage disabled.
 // Copy starting from here in this case:|const MONKEY = false;
 
+// stolen from here https://stackoverflow.com/a/44902662/7208967
 function DOMEval(code, doc) {
     doc = doc || document;
     let script = doc.createElement("script");
@@ -57,6 +58,8 @@ function whiteng(idoc) {
     range.setEnd(slices[elem.endSliceIdx].firstChild, elem.endOffset);
     selection.removeAllRanges();
     selection.addRange(range);
+    // pad is not available from monkey extensions for security reasons
+    // this is why this whole function is called via js injection
     pad.editbarClick('clearauthorship');
   }
   selection.removeAllRanges();
