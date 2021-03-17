@@ -85,7 +85,7 @@ function main() {
     };
     idoc.onpaste = function(evt) {
       let paste = evt.clipboardData.getData('text');
-      const aegipaste = paste.replace(/Dialogue: ?\d+,(\d+):(\d+):(\d+)\.(\d+),(\d+):(\d+):(\d+)\.(\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(([a-z]\w*:)?(.*))/g,
+      const aegipaste = paste.replace(/Dialogue: ?\d+,(\d+):(\d+):(\d+)\.(\d+),(\d+):(\d+):(\d+)\.(\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(([a-z]\w*: ?)?(.*))/gi,
         function(match, sh, sm, ss, scs, eh, em, es, ecs, style, actor, text, intextActor, remainingText) {
           const startMinutes = parseInt(sh) * 60 + parseInt(sm);
           const startTime = (startMinutes < 10 ? '0' : '') + startMinutes + ':' + ss + '.' + scs;
@@ -95,12 +95,11 @@ function main() {
           const durationCentiSec = endCentiSec - startCentiSec;
           const durationFractional = durationCentiSec % 100;
           const timing = startTime + ',' + (durationCentiSec - durationFractional) / 100 + (durationFractional < 10 ? '.0' : '.') + durationFractional;
-
           if (style == 'Default') {
             if (actor != '') {
               style = expandAlias(actor);
             } else if (intextActor) {
-              style = expandAlias(intextActor.slice(0, -1));
+              style = expandAlias(intextActor.slice(0, intextActor.indexOf(':')));
               text = remainingText;
             }
           }
