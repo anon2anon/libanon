@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name        seamtress.user.js
+// @author      Wolfram
+// @namespace   wolframep@yandex.ru
 // @include     http://pony.pad.sunnysubs.com/*
 // @include     https://pony.pad.sunnysubs.com/*
 // @exclude     http://pony.pad.sunnysubs.com/
 // @exclude     https://pony.pad.sunnysubs.com/
 // @exclude     http://pony.pad.sunnysubs.com/*/*
 // @exclude     https://pony.pad.sunnysubs.com/*/*
-// @version     0.1
+// @version     0.2
 // @run-at      document-end
 // @grant       none
 // ==/UserScript==
@@ -65,22 +67,57 @@ function whiteng(idoc) {
   selection.removeAllRanges();
 }
 
+// alias expanding not supported yet
+function expandAlias(actor) {
+  return actor;
+}
+
 function main() {
   try {
     let idocStr = 'document.getElementsByTagName(\'iframe\')[1].contentWindow.document.getElementsByTagName(\'iframe\')[0].contentWindow.document';
     let idoc = eval(idocStr);
     idoc.onkeydown = function(evt) {
-      try {
-        if (evt.ctrlKey && evt.shiftKey && String.fromCharCode(evt.which).toLowerCase() == 'f') {
-          DOMEval(whiteng.toString() + ';whiteng(' + idocStr + ');', null);
-        } 
-      } catch (error) {
-        console.log('ACTION FAILED!');
-        console.log(error);
+      if (!evt.ctrlKey)
         return;
+      if (evt.shiftKey && String.fromCharCode(evt.which).toLowerCase() == 'f') {
+        DOMEval(whiteng.toString() + ';whiteng(' + idocStr + ');', null);
       }
     };
-    console.log('Successfully set keydown event in seamtress.user.js');
+    idoc.onpaste = function(evt) {
+      let paste = evt.clipboardData.getData('text');
+      const aegipaste = paste.replace(/Dialogue: ?\d+,(\d+):(\d+):(\d+)\.(\d+),(\d+):(\d+):(\d+)\.(\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(([a-z]\w*:)?(.*))/g,
+        function(match, sh, sm, ss, scs, eh, em, es, ecs, style, actor, text, intextActor, remainingText) {
+          const startMinutes = parseInt(sh) * 60 + parseInt(sm);
+          const startTime = (startMinutes < 10 ? '0' : '') + startMinutes + ':' + ss + '.' + scs;
+
+          const startCentiSec = startMinutes * 6000 + parseInt(ss) * 100 + parseInt(scs);
+          const endCentiSec = parseInt(eh) * 360000 + parseInt(em) * 6000 + parseInt(es) * 100 + parseInt(ecs);
+          const durationCentiSec = endCentiSec - startCentiSec;
+          const durationFractional = durationCentiSec % 100;
+          const timing = startTime + ',' + (durationCentiSec - durationFractional) / 100 + (durationFractional < 10 ? '.0' : '.') + durationFractional;
+
+          if (style == 'Default') {
+            if (actor != '') {
+              style = expandAlias(actor);
+            } else if (intextActor) {
+              style = expandAlias(intextActor.slice(0, -1));
+              text = remainingText;
+            }
+          }
+          return timing + ' ' + style + ': ' + text + ' → ';
+        });
+      if (aegipaste == paste)
+        return;
+
+      const selection = idoc.getSelection();
+      if (!selection.rangeCount) return false;
+      selection.deleteFromDocument();
+      let divElem = document.createElement("div");
+      divElem.innerHTML = aegipaste.replace(/\n/g, '<br\>');
+      selection.getRangeAt(0).insertNode(divElem);
+      evt.preventDefault();
+    };
+    console.log('Successfully set events in seamtress.user.js');
   } catch (error) {
     console.log(error);
     setTimeout(main, 2000);
