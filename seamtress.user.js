@@ -8,7 +8,7 @@
 // @exclude     https://pony.pad.sunnysubs.com/
 // @exclude     http://pony.pad.sunnysubs.com/*/*
 // @exclude     https://pony.pad.sunnysubs.com/*/*
-// @version     0.2
+// @version     0.3
 // @run-at      document-end
 // @grant       none
 // ==/UserScript==
@@ -72,6 +72,51 @@ function expandAlias(actor) {
   return actor;
 }
 
+function getMagicDom(elem) {
+  while (elem !== null) {
+    if (elem.tagName === 'DIV' && typeof elem.id === 'string'
+        && elem.id.indexOf('magicdom') === 0)
+      return elem;
+    elem = elem.parentNode;
+  }
+  return null;
+}
+
+function getTranslationDialogue(line) {
+  const match = line.match(/^(\d{0,3}):(\d{2})\.(\d{2}),(\d{0,4}).(\d{2}) (\w+):[^→]*→(.*)$/);
+  if (!match)
+    return null;
+  let dialogue = 'Dialogue: 0,';
+  const totalMinutes = parseInt(match[1]);
+  let seconds = parseInt(match[2]);
+  if (seconds >= 60) {
+    alert('seconds >= 60');
+    return null;
+  }
+  let centiSeconds = parseInt(match[3]);
+  let minutes = totalMinutes % 60;
+  let hours = (totalMinutes - minutes) / 60;
+  for (let i = 0;; ++i) {
+    dialogue += (hours < 10 ? '0' : '') + hours + ':';
+    dialogue += (minutes < 10 ? '0' : '') + minutes + ':';
+    dialogue += (seconds < 10 ? '0' : '') + seconds + '.';
+    dialogue += (centiSeconds < 10 ? '0' : '') + centiSeconds + ',';
+    if (i == 1)
+      break;
+    let totalCentiSeconds = 360000 * hours + 6000 * minutes + 100 * seconds + centiSeconds;
+    totalCentiSeconds += parseInt(match[4]) * 100 + parseInt(match[5]);
+    centiSeconds = totalCentiSeconds % 100;
+    let tmp = (totalCentiSeconds - centiSeconds) / 100;
+    seconds = tmp % 60;
+    tmp = (tmp - seconds) / 60;
+    minutes = tmp % 60;
+    hours = (tmp - minutes) / 60;
+  }
+  dialogue += match[6] + ',,0,0,0,,';
+  dialogue += match[7].trim().replace(/\.\.\./g, '…').replace(/ [-‐‒–―]+/g, ' —').replace(/[-‐‒–―]+ /g, '— ');
+  return dialogue;
+}
+
 function main() {
   try {
     let idocStr = 'document.getElementsByTagName(\'iframe\')[1].contentWindow.document.getElementsByTagName(\'iframe\')[0].contentWindow.document';
@@ -114,6 +159,45 @@ function main() {
       let divElem = document.createElement("div");
       divElem.innerHTML = aegipaste.replace(/\n/g, '<br\>');
       selection.getRangeAt(0).insertNode(divElem);
+      evt.preventDefault();
+    };
+    idoc.oncopy = function(evt) {
+      const selection = idoc.getSelection();
+      const selStr = selection.toString().trim();
+      const arrowIdx = selStr.indexOf('→');
+      if (arrowIdx == -1 || arrowIdx == 0 || arrowIdx == selStr.length - 1
+          || selStr.match(/^\d{2}:\d+\.\d+,/))
+        return;
+
+      const range = selection.getRangeAt(0);
+      const start = getMagicDom(range.startContainer);
+      if (!start) {
+        alert("aegicopy: can't find start line");
+        return;
+      }
+      const end = getMagicDom(range.endContainer);
+      if (!end) {
+        alert("aegicopy: can't find end line");
+        return;
+      }
+
+      let paste = '';
+      for (let line = start;; line = line.nextSibling) {
+        if (line === null) {
+          alert("aegicopy: can't iterate line range properly");
+          return;
+        }
+        const dialogue = getTranslationDialogue(line.innerText);
+        if (dialogue === null) {
+          alert("aegicopy: can't parse line\n" + line.innerText);
+          return;
+        }
+        paste += dialogue;
+        if (line === end)
+          break;
+        paste += '\r\n';
+      }
+      evt.clipboardData.setData('text/plain', paste);
       evt.preventDefault();
     };
     console.log('Successfully set events in seamtress.user.js');
