@@ -8,7 +8,7 @@
 // @exclude     https://pony.pad.sunnysubs.com/
 // @exclude     http://pony.pad.sunnysubs.com/*/*
 // @exclude     https://pony.pad.sunnysubs.com/*/*
-// @version     0.3
+// @version     0.4
 // @run-at      document-end
 // @grant       none
 // ==/UserScript==
@@ -67,6 +67,17 @@ function whiteng(idoc) {
   selection.removeAllRanges();
 }
 
+function whitenLines(idoc, start, end) {
+  let range = idoc.createRange();
+  let selection = idoc.getSelection();
+  range.setStart(start, 0);
+  range.setEnd(end, end.children.length);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  DOMEval("pad.editbarClick('clearauthorship');", null);
+  selection.collapseToEnd();
+}
+
 // alias expanding not supported yet
 function expandAlias(actor) {
   return actor;
@@ -119,7 +130,7 @@ function getTranslationDialogue(line) {
 
 function main() {
   try {
-    let idocStr = 'document.getElementsByTagName(\'iframe\')[1].contentWindow.document.getElementsByTagName(\'iframe\')[0].contentWindow.document';
+    let idocStr = "document.getElementsByTagName('iframe')[1].contentWindow.document.getElementsByTagName('iframe')[0].contentWindow.document";
     let idoc = eval(idocStr);
     idoc.onkeydown = function(evt) {
       if (!evt.ctrlKey)
@@ -198,6 +209,8 @@ function main() {
         paste += '\r\n';
       }
       evt.clipboardData.setData('text/plain', paste);
+
+      whitenLines(idoc, start, end);
       evt.preventDefault();
     };
     console.log('Successfully set events in seamtress.user.js');
