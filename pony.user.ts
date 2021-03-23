@@ -14,7 +14,7 @@
 // ==/UserScript==
 "use strict";
 
-// This function is used to call code containing `pad.editbarClick('clearauthorship');`,
+// This function is used to call code from pad internals via `pad` and `padeditor`,
 // which is not available from monkey extensions for security reasons.
 function DOMEval(code: string) {
     let script = document.createElement('script');
@@ -25,7 +25,11 @@ function DOMEval(code: string) {
 type OptDoc = null | HTMLDocument;
 
 var paddoc: OptDoc = null;
-var pad: any;  // dummy variable for satisfying TypeScript in DOMEval'd functions
+// dummy variables for satisfying TypeScript in DOMEval'd functions
+var pad: any, padeditor: any;
+interface Window {
+    trueAuthor: any;
+}
 
 function getPadDoc(): OptDoc {
     try {
@@ -138,6 +142,18 @@ function clearOriginal(): void {
     }
 }
 
+function toggleWhitetextMode(): void {
+    padeditor.ace.callWithAce((ace: any) => {
+        if (window.trueAuthor) {
+            ace.editor.setProperty("userAuthor", window.trueAuthor);
+            delete window.trueAuthor;
+        } else {
+            window.trueAuthor = ace.editor.getProperty("userAuthor");
+            ace.editor.setProperty("userAuthor", "g.whitetext");
+        }
+    });
+}
+
 function isCtrlShiftKey(event: KeyboardEvent, symb: string): boolean {
     return event.ctrlKey && event.shiftKey &&
         String.fromCharCode(event.which).toLowerCase() === symb;
@@ -158,6 +174,9 @@ function main(attempts: number) {
         if (isCtrlShiftKey(event, 'f')) {
             DOMEval([getPadDoc, getMagicDom, iterateAllLines, iterateLineRange,
               getArrowNode, clearOriginal].join(';') + ";clearOriginal();");
+        }
+        if (isCtrlShiftKey(event, 'y')) {
+            DOMEval([toggleWhitetextMode].join(';') + "toggleWhitetextMode();");
         }
     });
     console.log('Successfully set events in seamtress.user.js');
