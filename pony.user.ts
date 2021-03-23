@@ -50,21 +50,19 @@ function getMagicDom(elem: Node): null | Node {
     }
 }
 
-function* iterateAllLines(doc: HTMLDocument) {
-    for (let line of doc.querySelectorAll('#innerdocbody>div')) {
-        yield line;
-    }
+function iterateAllLines(doc: HTMLDocument) {
+    return doc.querySelectorAll('#innerdocbody>div');
 }
 
 function* iterateLineRange(range: Range) {
     const sc = range.startContainer;
-    const start = (sc as HTMLElement).id == 'innerdocbody' ? sc.firstChild : getMagicDom(sc);
+    const start = (sc as HTMLElement).id === 'innerdocbody' ? sc.firstChild : getMagicDom(sc);
     if (!start) {
         alert("can't find start line");
         return;
     }
     const ec = range.endContainer;
-    const end = (ec as HTMLElement).id == 'innerdocbody' ? sc.lastChild : getMagicDom(ec);
+    const end = (ec as HTMLElement).id === 'innerdocbody' ? ec.lastChild : getMagicDom(ec);
     if (!end) {
         alert("can't find end line");
         return;
@@ -84,7 +82,25 @@ function* iterateLineRange(range: Range) {
     }
 }
 
-function clearOriginal() {
+function getArrowNode(line: Node): null | Text {
+    const children = line.childNodes;
+    if (!children.length) {
+        if (!(line instanceof Text) || !line.textContent
+            || !line.textContent.match(/→/)) {
+            return null;
+        }
+        return line;
+    }
+    for (let child of children) {
+        const arrowNode = getArrowNode(child);
+        if (arrowNode) {
+            return arrowNode;
+        }
+    }
+    return null;
+}
+
+function clearOriginal(): void {
     const doc = getPadDoc();
     if (doc === null) {
         alert('Unexpected failure on loading pad document in seamtress.user.js');
@@ -102,34 +118,29 @@ function clearOriginal() {
         if (!(line instanceof HTMLElement)) {
             continue;
         }
-        const lineParts = line.children;
-        if (!lineParts[0] || !lineParts[0].classList.contains('pony_timing')) {
+        if (!line.children[0] || !line.children[0].classList.contains('pony_timing')) {
             continue;
         }
-        for (let iPart = 0; iPart < lineParts.length; ++iPart) {
-            const part = lineParts[iPart];
-            if (!(part instanceof HTMLElement)) {
-                continue;
-            }
-            const text = part.innerText;
-            let offset = text.indexOf('→');
-            if (offset === -1) {
-                continue;
-            }
-            ++offset;
-            if (text[offset] === ' ' || text[offset] == String.fromCodePoint(0xa0)) {
-                // clear color of space or non-breaking space after the arrow
-                ++offset;
-            }
-            if (!part.firstChild) {
-                continue;
-            }
-            sel.setBaseAndExtent(lineParts[0], 0, part.firstChild, offset);
-            pad.editbarClick('clearauthorship');
-            sel.removeAllRanges();
-            break;
+        let arrowNode = getArrowNode(line);
+        if (!arrowNode) {
+            continue;
         }
+        const text = arrowNode.textContent!;
+        let offset = text.indexOf('→');
+        ++offset;
+        if (text[offset] === ' ' || text[offset] == String.fromCodePoint(0xa0)) {
+            // clear color of space or non-breaking space after the arrow
+            ++offset;
+        }
+        sel.setBaseAndExtent(line.firstChild!, 0, arrowNode, offset);
+        pad.editbarClick('clearauthorship');
+        sel.removeAllRanges();
     }
+}
+
+function isCtrlShiftKey(event: KeyboardEvent, symb: string): boolean {
+    return event.ctrlKey && event.shiftKey &&
+        String.fromCharCode(event.which).toLowerCase() === symb;
 }
 
 function main(attempts: number) {
@@ -144,10 +155,9 @@ function main(attempts: number) {
         return;
     }
     paddoc.addEventListener('keydown', event => {
-        if (event.ctrlKey && event.shiftKey
-              && String.fromCharCode(event.which).toLowerCase() == 'f') {
+        if (isCtrlShiftKey(event, 'f')) {
             DOMEval([getPadDoc, getMagicDom, iterateAllLines, iterateLineRange,
-              clearOriginal].join(';') + ";clearOriginal();");
+              getArrowNode, clearOriginal].join(';') + ";clearOriginal();");
         }
     });
     console.log('Successfully set events in seamtress.user.js');
