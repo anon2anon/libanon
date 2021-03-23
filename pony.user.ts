@@ -8,7 +8,7 @@
 // @exclude     https://pony.pad.sunnysubs.com/
 // @exclude     http://pony.pad.sunnysubs.com/*/*
 // @exclude     https://pony.pad.sunnysubs.com/*/*
-// @version     0.5
+// @version     0.6
 // @run-at      document-end
 // @grant       none
 // ==/UserScript==
@@ -154,6 +154,79 @@ function toggleWhitetextMode(): void {
     });
 }
 
+const ZERO_STYLE = 'Default';
+const MAX_TIME_CS = 24 * 60 * 60 * 100;
+
+function p0(num: number): string {
+    return (num < 10 ? '0' : '') + num;
+}
+
+// not implemented
+function expandAlias(alias: string): string {
+    return alias;
+}
+
+class PadLine {
+    // cs means centiseconds
+    start_cs: number;
+    len_cs: number;
+    style: string;
+    original: string;
+    translation: string;
+
+    constructor(start: number, len: number, style: string, orig: string, trns?: string) {
+        this.start_cs = start;
+        this.len_cs = len;
+        this.style = style;
+        this.original = orig;
+        this.translation = trns ? trns : '';
+    }
+
+    toString(): string {
+        const start_pure_cs = this.start_cs % 100;
+        const start_sec = (this.start_cs - start_pure_cs) / 100;
+        const start_pure_sec = start_sec % 60;
+        const start_min = (start_sec - start_pure_sec) / 60;
+        const len_pure_cs = this.len_cs % 100;
+        const len_sec = (this.len_cs - len_pure_cs) / 100;
+        return `${p0(start_min)}:${p0(start_pure_sec)}.${p0(start_pure_cs)},` +
+            `${len_sec}.${p0(len_pure_cs)} ` +
+            `${this.style}: ${this.original} → ${this.translation}`;
+    }
+}
+
+function parseAssLine(line: string): null | PadLine {
+    const match = line.match(/^Dialogue: ?\d+,(\d+):(\d+):(\d+)\.(\d+),(\d+):(\d+):(\d+)\.(\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(([a-z]\w*: ?)?(.*))$/i);
+    if (!match) {
+        return null;
+    }
+    let timing = [0, 0];
+    for (let i = 0; i < 2; ++i) {
+        timing[i] += parseInt(match[4 * i + 1], 10);
+        timing[i] *= 60;
+        timing[i] += parseInt(match[4 * i + 2], 10);
+        timing[i] *= 60;
+        timing[i] += parseInt(match[4 * i + 3], 10);
+        timing[i] *= 100;
+        timing[i] += parseInt(match[4 * i + 4], 10);
+    }
+    if (timing[0] > timing[1] || timing[1] > MAX_TIME_CS) {
+        return null;
+    }
+    let l = new PadLine(timing[0], timing[1] - timing[0], match[9], match[11]);
+    const actor = match[10];
+    const actorInText = match[12];
+    if (l.style === ZERO_STYLE) {
+        if (actor.length) {
+            l.style = expandAlias(actor);
+        } else if (actorInText) {
+            l.style = expandAlias(actorInText.slice(0, actorInText.indexOf(':')));
+            l.original = match[13];
+        }
+    }
+    return l;
+}
+
 function isCtrlShiftKey(event: KeyboardEvent, symb: string): boolean {
     return event.ctrlKey && event.shiftKey &&
         String.fromCharCode(event.which).toLowerCase() === symb;
@@ -176,8 +249,36 @@ function main(attempts: number) {
               getArrowNode, clearOriginal].join(';') + ";clearOriginal();");
         }
         if (isCtrlShiftKey(event, 'y')) {
-            DOMEval([toggleWhitetextMode].join(';') + "toggleWhitetextMode();");
+            DOMEval([toggleWhitetextMode].join(';') + ";toggleWhitetextMode();");
         }
+    });
+    paddoc.addEventListener('paste', event => {
+        if (!event.clipboardData) {
+            alert('Clipboard not detected!');
+            return;
+        }
+        const sel = paddoc!.getSelection();
+        if (!sel || !sel.rangeCount) {
+            return;
+        }
+        const payloadLines = event.clipboardData.getData('text').split(/\r?\n/g);
+        let padLines = [];
+        for (let line of payloadLines) {
+            if (!line.trim().length) {
+                continue;
+            }
+            const parsed = parseAssLine(line);
+            if (!parsed) {
+                return;
+            }
+            padLines.push(parsed);
+        }
+        // Here we just insert lines, we need to rewrite this later
+        sel.deleteFromDocument();
+        let divElem = document.createElement('div');
+        divElem.innerHTML = padLines.join('<br>');
+        sel.getRangeAt(0).insertNode(divElem);
+        event.preventDefault();
     });
     console.log('Successfully set events in seamtress.user.js');
 }
