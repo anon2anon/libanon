@@ -8,216 +8,345 @@
 // @exclude     https://pony.pad.sunnysubs.com/
 // @exclude     http://pony.pad.sunnysubs.com/*/*
 // @exclude     https://pony.pad.sunnysubs.com/*/*
-// @version     0.4
+// @version     0.7
 // @run-at      document-end
 // @grant       none
 // ==/UserScript==
-
-const MONKEY = true;
-// This script is intended to be executed from Greasemonkey/Tampermonkey.
-// However, you can use it from console with features requiring persistent storage disabled.
-// Copy starting from here in this case:|const MONKEY = false;
-
-// stolen from here https://stackoverflow.com/a/44902662/7208967
-function DOMEval(code, doc) {
-    doc = doc || document;
-    let script = doc.createElement("script");
+"use strict";
+// This function is used to call code from pad internals via `pad` and `padeditor`,
+// which is not available from monkey extensions for security reasons.
+function DOMEval(code) {
+    let script = document.createElement('script');
     script.text = code;
-    doc.head.appendChild(script).parentNode.removeChild(script);
+    document.head.appendChild(script).parentNode.removeChild(script);
 }
-
-function whiteng(idoc) {
-  let selection = idoc.getSelection();
-  let lines = idoc.getElementsByTagName('div');
-  let schedule = [];
-  for (let iLine = 0; iLine < lines.length; ++iLine) {
-    const line = lines[iLine];
-    const english = line.children[2];
-    if (!english || !selection.containsNode(english))
-      continue;
-
-    const slices = line.children;
-    if (!slices[0] || !slices[0].classList.contains('pony_timing'))
-      continue;
-
-    let whiteElem = {lineIdx: iLine};
-    for (let iSlice = 0; iSlice < slices.length; ++iSlice) {
-      const text = slices[iSlice].textContent;
-      const arrowIdx = text.indexOf('→');
-      if (arrowIdx !== -1) {
-        whiteElem.endSliceIdx = iSlice;
-        whiteElem.endOffset = Math.min(arrowIdx + 2, text.length);
-        break;
-      }
+var paddoc = null;
+// dummy variables for satisfying TypeScript in DOMEval'd functions
+var pad, padeditor;
+function getPadDoc() {
+    try {
+        return document.querySelectorAll('iframe')[1].contentWindow.document
+            .querySelector('iframe').contentWindow.document;
     }
-    if (whiteElem.endOffset)
-      schedule.push(whiteElem);
-  }
-  for (let elem of schedule) {
-    let slices = lines[elem.lineIdx].children;
-    let range = idoc.createRange();
-    range.setStart(slices[0].firstChild, 0);
-    range.setEnd(slices[elem.endSliceIdx].firstChild, elem.endOffset);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    // pad is not available from monkey extensions for security reasons
-    // this is why this whole function is called via js injection
-    pad.editbarClick('clearauthorship');
-  }
-  selection.removeAllRanges();
+    catch (_a) { }
+    console.log('Pad document not found');
+    return null;
 }
-
-function whitenLines(idoc, start, end) {
-  let range = idoc.createRange();
-  let selection = idoc.getSelection();
-  range.setStart(start, 0);
-  range.setEnd(end, end.children.length);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  DOMEval("pad.editbarClick('clearauthorship');", null);
-  selection.collapseToEnd();
-}
-
-// alias expanding not supported yet
-function expandAlias(actor) {
-  return actor;
-}
-
 function getMagicDom(elem) {
-  while (elem !== null) {
-    if (elem.tagName === 'DIV' && typeof elem.id === 'string'
-        && elem.id.indexOf('magicdom') === 0)
-      return elem;
-    elem = elem.parentNode;
-  }
-  return null;
+    while (true) {
+        const parent = elem.parentNode;
+        if (!parent) {
+            return null;
+        }
+        if (elem.tagName === 'DIV' &&
+            parent.id === 'innerdocbody') {
+            return elem;
+        }
+        elem = parent;
+    }
 }
-
-function getTranslationDialogue(line) {
-  const match = line.match(/^(\d{0,3}):(\d{2})\.(\d{2}),(\d{0,4}).(\d{2}) (\w+):[^→]*→(.*)$/);
-  if (!match)
-    return null;
-  let dialogue = 'Dialogue: 0,';
-  const totalMinutes = parseInt(match[1]);
-  let seconds = parseInt(match[2]);
-  if (seconds >= 60) {
-    alert('seconds >= 60');
-    return null;
-  }
-  let centiSeconds = parseInt(match[3]);
-  let minutes = totalMinutes % 60;
-  let hours = (totalMinutes - minutes) / 60;
-  for (let i = 0;; ++i) {
-    dialogue += (hours < 10 ? '0' : '') + hours + ':';
-    dialogue += (minutes < 10 ? '0' : '') + minutes + ':';
-    dialogue += (seconds < 10 ? '0' : '') + seconds + '.';
-    dialogue += (centiSeconds < 10 ? '0' : '') + centiSeconds + ',';
-    if (i == 1)
-      break;
-    let totalCentiSeconds = 360000 * hours + 6000 * minutes + 100 * seconds + centiSeconds;
-    totalCentiSeconds += parseInt(match[4]) * 100 + parseInt(match[5]);
-    centiSeconds = totalCentiSeconds % 100;
-    let tmp = (totalCentiSeconds - centiSeconds) / 100;
-    seconds = tmp % 60;
-    tmp = (tmp - seconds) / 60;
-    minutes = tmp % 60;
-    hours = (tmp - minutes) / 60;
-  }
-  dialogue += match[6] + ',,0,0,0,,';
-  dialogue += match[7].trim().replace(/\.\.\./g, '…').replace(/ [-‐‒–―]+/g, ' —').replace(/[-‐‒–―]+ /g, '— ');
-  return dialogue;
+function iterateAllLines(doc) {
+    return doc.querySelectorAll('#innerdocbody>div');
 }
-
-function main() {
-  try {
-    let idocStr = "document.getElementsByTagName('iframe')[1].contentWindow.document.getElementsByTagName('iframe')[0].contentWindow.document";
-    let idoc = eval(idocStr);
-    idoc.onkeydown = function(evt) {
-      if (!evt.ctrlKey)
+function* iterateLineRange(range) {
+    const sc = range.startContainer;
+    const start = sc.id === 'innerdocbody' ? sc.firstChild : getMagicDom(sc);
+    if (!start) {
+        alert("can't find start line");
         return;
-      if (evt.shiftKey && String.fromCharCode(evt.which).toLowerCase() == 'f') {
-        DOMEval(whiteng.toString() + ';whiteng(' + idocStr + ');', null);
-      }
-    };
-    idoc.onpaste = function(evt) {
-      let paste = evt.clipboardData.getData('text');
-      const aegipaste = paste.replace(/Dialogue: ?\d+,(\d+):(\d+):(\d+)\.(\d+),(\d+):(\d+):(\d+)\.(\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(([a-z]\w*: ?)?(.*))/gi,
-        function(match, sh, sm, ss, scs, eh, em, es, ecs, style, actor, text, intextActor, remainingText) {
-          const startMinutes = parseInt(sh) * 60 + parseInt(sm);
-          const startTime = (startMinutes < 10 ? '0' : '') + startMinutes + ':' + ss + '.' + scs;
-
-          const startCentiSec = startMinutes * 6000 + parseInt(ss) * 100 + parseInt(scs);
-          const endCentiSec = parseInt(eh) * 360000 + parseInt(em) * 6000 + parseInt(es) * 100 + parseInt(ecs);
-          const durationCentiSec = endCentiSec - startCentiSec;
-          const durationFractional = durationCentiSec % 100;
-          const timing = startTime + ',' + (durationCentiSec - durationFractional) / 100 + (durationFractional < 10 ? '.0' : '.') + durationFractional;
-          if (style == 'Default') {
-            if (actor != '') {
-              style = expandAlias(actor);
-            } else if (intextActor) {
-              style = expandAlias(intextActor.slice(0, intextActor.indexOf(':')));
-              text = remainingText;
+    }
+    const ec = range.endContainer;
+    const end = ec.id === 'innerdocbody' ? ec.lastChild : getMagicDom(ec);
+    if (!end) {
+        alert("can't find end line");
+        return;
+    }
+    let line = start;
+    while (true) {
+        const next = line.nextSibling;
+        yield line;
+        if (line === end) {
+            return;
+        }
+        if (!next) {
+            alert("iterateLineRange: iteration failure");
+            return;
+        }
+        line = next;
+    }
+}
+function getArrowNode(line) {
+    const children = line.childNodes;
+    if (!children.length) {
+        if (!(line instanceof Text) || !line.textContent
+            || !line.textContent.match(/→/)) {
+            return null;
+        }
+        return line;
+    }
+    for (let child of children) {
+        const arrowNode = getArrowNode(child);
+        if (arrowNode) {
+            return arrowNode;
+        }
+    }
+    return null;
+}
+function clearOriginal() {
+    const doc = getPadDoc();
+    if (doc === null) {
+        alert('Unexpected failure on loading pad document in seamtress.user.js');
+        return;
+    }
+    const sel = doc.getSelection();
+    if (sel === null) {
+        alert('iframe not loaded');
+        return;
+    }
+    const iter = sel.isCollapsed ? iterateAllLines(doc)
+        : iterateLineRange(sel.getRangeAt(0));
+    sel.removeAllRanges();
+    for (let line of iter) {
+        if (!(line instanceof HTMLElement)) {
+            continue;
+        }
+        if (!line.children[0] || !line.children[0].classList.contains('pony_timing')) {
+            continue;
+        }
+        let arrowNode = getArrowNode(line);
+        if (!arrowNode) {
+            continue;
+        }
+        const text = arrowNode.textContent;
+        let offset = text.indexOf('→');
+        ++offset;
+        if (text[offset] === ' ' || text[offset] == String.fromCodePoint(0xa0)) {
+            // clear color of space or non-breaking space after the arrow
+            ++offset;
+        }
+        sel.setBaseAndExtent(line.firstChild, 0, arrowNode, offset);
+        pad.editbarClick('clearauthorship');
+        sel.removeAllRanges();
+    }
+}
+function toggleWhitetextMode() {
+    padeditor.ace.callWithAce((ace) => {
+        if (window.trueAuthor) {
+            ace.editor.setProperty("userAuthor", window.trueAuthor);
+            delete window.trueAuthor;
+        }
+        else {
+            window.trueAuthor = ace.editor.getProperty("userAuthor");
+            ace.editor.setProperty("userAuthor", "g.whitetext");
+        }
+    });
+}
+const ZERO_STYLE = 'Default';
+const MAX_TIME_CS = 24 * 60 * 60 * 100;
+function p0(num) {
+    return (num < 10 ? '0' : '') + num;
+}
+function ftime(cs) {
+    const pure_cs = cs % 100;
+    let tmp = (cs - pure_cs) / 100;
+    const pure_sec = tmp % 60;
+    tmp = (tmp - pure_sec) / 60;
+    const pure_min = tmp % 60;
+    const hour = (tmp - pure_min) / 60;
+    return `${p0(hour)}:${p0(pure_min)}:${p0(pure_sec)}.${p0(pure_cs)}`;
+}
+// not implemented
+function expandAlias(alias) {
+    return alias;
+}
+class PadLine {
+    constructor(start, len, style, orig, trns) {
+        this.start_cs = start;
+        this.len_cs = len;
+        this.style = style;
+        this.original = orig;
+        this.translation = trns ? trns : '';
+    }
+    toString() {
+        const start_pure_cs = this.start_cs % 100;
+        const start_sec = (this.start_cs - start_pure_cs) / 100;
+        const start_pure_sec = start_sec % 60;
+        const start_min = (start_sec - start_pure_sec) / 60;
+        const len_pure_cs = this.len_cs % 100;
+        const len_sec = (this.len_cs - len_pure_cs) / 100;
+        return `${p0(start_min)}:${p0(start_pure_sec)}.${p0(start_pure_cs)},` +
+            `${len_sec}.${p0(len_pure_cs)} ` +
+            `${this.style}: ${this.original} → ${this.translation}`;
+    }
+    toAegi(out) {
+        const end_cs = this.start_cs + this.len_cs;
+        const style = this.style.replace(',', '');
+        return `Dialogue: 0,${ftime(this.start_cs)},${ftime(end_cs)},${style},,0,0,0,,${this[out].replace(/\.\.\./g, '…')}`;
+    }
+}
+function parseAssLine(line) {
+    const match = line.match(/^Dialogue: ?\d+,(\d+):(\d+):(\d+)\.(\d+),(\d+):(\d+):(\d+)\.(\d+),([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,(([a-z]\w*: ?)?(.*))$/i);
+    if (!match) {
+        return null;
+    }
+    let timing = [0, 0];
+    for (let i = 0; i < 2; ++i) {
+        timing[i] += parseInt(match[4 * i + 1], 10);
+        timing[i] *= 60;
+        timing[i] += parseInt(match[4 * i + 2], 10);
+        timing[i] *= 60;
+        timing[i] += parseInt(match[4 * i + 3], 10);
+        timing[i] *= 100;
+        timing[i] += parseInt(match[4 * i + 4], 10);
+    }
+    if (timing[0] > timing[1] || timing[1] > MAX_TIME_CS) {
+        return null;
+    }
+    let l = new PadLine(timing[0], timing[1] - timing[0], match[9], match[11]);
+    const actor = match[10];
+    const actorInText = match[12];
+    if (l.style === ZERO_STYLE) {
+        if (actor.length) {
+            l.style = expandAlias(actor);
+        }
+        else if (actorInText) {
+            l.style = expandAlias(actorInText.slice(0, actorInText.indexOf(':')));
+            l.original = match[13];
+        }
+    }
+    return l;
+}
+function parsePadLine(line) {
+    const match = line.match(/^(\d+):(\d{2}).(\d{2}),(\d+).(\d{2}) ([a-z]\w*):([^→]*)→(.*)$/i);
+    if (!match) {
+        return null;
+    }
+    let start = 0;
+    start += parseInt(match[1], 10);
+    start *= 60;
+    const sec = parseInt(match[2], 10);
+    if (sec >= 60) {
+        alert('seconds >= 60');
+        return null;
+    }
+    start += sec;
+    start *= 100;
+    start += parseInt(match[3], 10);
+    let len = 0;
+    len += parseInt(match[4], 10);
+    len *= 100;
+    len += parseInt(match[5], 10);
+    if (start + len > MAX_TIME_CS) {
+        return null;
+    }
+    return new PadLine(start, len, match[6], match[7].trim(), match[8].trim());
+}
+function isExportable(sel) {
+    if (!sel.rangeCount) {
+        return false;
+    }
+    const range = sel.getRangeAt(0);
+    const sc = range.startContainer;
+    if (sc === range.endContainer && sc.parentNode.id === 'innerdocbody' &&
+        range.startOffset === 0 && range.endOffset === sc.childNodes.length) {
+        // whole line selected by double click
+        return true;
+    }
+    const selStr = sel.toString();
+    if (selStr.indexOf('\n') === -1) {
+        return false;
+    }
+    if (selStr.match(/^\d+:\d+\.\d+,/)) {
+        return false;
+    }
+    return true;
+}
+function isCtrlShiftKey(event, symb) {
+    return event.ctrlKey && event.shiftKey &&
+        String.fromCharCode(event.which).toLowerCase() === symb;
+}
+function clearRange(start, end) {
+    const sel = paddoc.getSelection();
+    sel.setBaseAndExtent(start, 0, end, end.childNodes.length);
+    DOMEval("pad.editbarClick('clearauthorship');");
+    sel.collapseToEnd();
+}
+function main(attempts) {
+    paddoc = getPadDoc();
+    if (paddoc === null) {
+        --attempts;
+        if (attempts === 0) {
+            alert('Failed to load pad document in seamtress.user.js');
+            return;
+        }
+        setTimeout(main, 2000, attempts);
+        return;
+    }
+    paddoc.addEventListener('keydown', event => {
+        if (isCtrlShiftKey(event, 'f')) {
+            DOMEval([getPadDoc, getMagicDom, iterateAllLines, iterateLineRange,
+                getArrowNode, clearOriginal].join(';') + ";clearOriginal();");
+        }
+        if (isCtrlShiftKey(event, 'y')) {
+            DOMEval([toggleWhitetextMode].join(';') + ";toggleWhitetextMode();");
+        }
+    });
+    paddoc.addEventListener('paste', event => {
+        if (!event.clipboardData) {
+            alert('Clipboard not detected!');
+            return;
+        }
+        const sel = paddoc.getSelection();
+        if (!sel || !sel.rangeCount) {
+            return;
+        }
+        const payloadLines = event.clipboardData.getData('text').split(/\r?\n/g);
+        let padLines = [];
+        for (let line of payloadLines) {
+            if (!line.trim().length) {
+                continue;
             }
-          }
-          return timing + ' ' + style + ': ' + text + ' → ';
-        });
-      if (aegipaste == paste)
-        return;
-
-      const selection = idoc.getSelection();
-      if (!selection.rangeCount) return false;
-      selection.deleteFromDocument();
-      let divElem = document.createElement("div");
-      divElem.innerHTML = aegipaste.replace(/\n/g, '<br\>');
-      selection.getRangeAt(0).insertNode(divElem);
-      evt.preventDefault();
-    };
-    idoc.oncopy = function(evt) {
-      const selection = idoc.getSelection();
-      const selStr = selection.toString().trim();
-      const arrowIdx = selStr.indexOf('→');
-      if (arrowIdx == -1 || arrowIdx == 0 || arrowIdx == selStr.length - 1
-          || selStr.match(/^\d{2}:\d+\.\d+,/))
-        return;
-
-      const range = selection.getRangeAt(0);
-      const start = getMagicDom(range.startContainer);
-      if (!start) {
-        alert("aegicopy: can't find start line");
-        return;
-      }
-      const end = getMagicDom(range.endContainer);
-      if (!end) {
-        alert("aegicopy: can't find end line");
-        return;
-      }
-
-      let paste = '';
-      for (let line = start;; line = line.nextSibling) {
-        if (line === null) {
-          alert("aegicopy: can't iterate line range properly");
-          return;
+            const parsed = parseAssLine(line);
+            if (!parsed) {
+                return;
+            }
+            padLines.push(parsed);
         }
-        const dialogue = getTranslationDialogue(line.innerText);
-        if (dialogue === null) {
-          alert("aegicopy: can't parse line\n" + line.innerText);
-          return;
+        // Here we just insert lines, we need to rewrite this later
+        sel.deleteFromDocument();
+        let divElem = document.createElement('div');
+        divElem.innerHTML = padLines.join('<br>');
+        sel.getRangeAt(0).insertNode(divElem);
+        event.preventDefault();
+    });
+    paddoc.addEventListener('copy', event => {
+        const sel = paddoc.getSelection();
+        if (!sel || !isExportable(sel)) {
+            return;
         }
-        paste += dialogue;
-        if (line === end)
-          break;
-        paste += '\r\n';
-      }
-      evt.clipboardData.setData('text/plain', paste);
-
-      whitenLines(idoc, start, end);
-      evt.preventDefault();
-    };
+        let start = null;
+        let end = null;
+        let padLines = [];
+        for (let line of iterateLineRange(sel.getRangeAt(0))) {
+            if (!start) {
+                start = line;
+            }
+            end = line;
+            const text = line.textContent;
+            const parsed = parsePadLine(text);
+            if (!parsed) {
+                alert("can't parse subtitle line\n" + text);
+                return;
+            }
+            padLines.push(parsed);
+        }
+        if (start === null || end === null) {
+            return;
+        }
+        event.clipboardData.setData('text/plain', padLines.map(l => l.toAegi('translation')).join('\r\n'));
+        clearRange(start, end);
+        event.preventDefault();
+    });
     console.log('Successfully set events in seamtress.user.js');
-  } catch (error) {
-    console.log(error);
-    setTimeout(main, 2000);
-  }
 }
-
-main();
+setTimeout(main, 2000, 5);
