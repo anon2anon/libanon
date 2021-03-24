@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name        pony.user.js
+// @name        seamtress.user.js
 // @author      Wolfram
 // @namespace   wolframep@yandex.ru
 // @include     http://pony.pad.sunnysubs.com/*
