@@ -8,7 +8,7 @@
 // @exclude     https://pony.pad.sunnysubs.com/
 // @exclude     http://pony.pad.sunnysubs.com/*/*
 // @exclude     https://pony.pad.sunnysubs.com/*/*
-// @version     0.6
+// @version     0.7
 // @run-at      document-end
 // @grant       none
 // ==/UserScript==
@@ -161,13 +161,22 @@ function p0(num: number): string {
     return (num < 10 ? '0' : '') + num;
 }
 
+function ftime(cs: number): string {
+    const pure_cs = cs % 100;
+    let tmp = (cs - pure_cs) / 100;
+    const pure_sec = tmp % 60;
+    tmp = (tmp - pure_sec) / 60;
+    const pure_min = tmp % 60;
+    const hour = (tmp - pure_min) / 60;
+    return `${p0(hour)}:${p0(pure_min)}:${p0(pure_sec)}.${p0(pure_cs)}`;
+}
+
 // not implemented
 function expandAlias(alias: string): string {
     return alias;
 }
 
 class PadLine {
-    // cs means centiseconds
     start_cs: number;
     len_cs: number;
     style: string;
@@ -192,6 +201,12 @@ class PadLine {
         return `${p0(start_min)}:${p0(start_pure_sec)}.${p0(start_pure_cs)},` +
             `${len_sec}.${p0(len_pure_cs)} ` +
             `${this.style}: ${this.original} → ${this.translation}`;
+    }
+
+    toAegi(out: 'original'|'translation'): string {
+        const end_cs = this.start_cs + this.len_cs;
+        const style = this.style.replace(',', '');
+        return `Dialogue: 0,${ftime(this.start_cs)},${ftime(end_cs)},${style},,0,0,0,,${this[out].replace(/\.\.\./g, '…')}`;
     }
 }
 
@@ -227,9 +242,63 @@ function parseAssLine(line: string): null | PadLine {
     return l;
 }
 
+function parsePadLine(line: string): null | PadLine {
+    const match = line.match(/^(\d+):(\d{2}).(\d{2}),(\d+).(\d{2}) ([a-z]\w*):([^→]*)→(.*)$/i);
+    if (!match) {
+        return null;
+    }
+    let start = 0;
+    start += parseInt(match[1], 10);
+    start *= 60;
+    const sec = parseInt(match[2], 10);
+    if (sec >= 60) {
+        alert('seconds >= 60');
+        return null;
+    }
+    start += sec;
+    start *= 100;
+    start += parseInt(match[3], 10);
+    let len = 0;
+    len += parseInt(match[4], 10);
+    len *= 100;
+    len += parseInt(match[5], 10);
+    if (start + len > MAX_TIME_CS) {
+        return null;
+    }
+    return new PadLine(start, len, match[6], match[7].trim(), match[8].trim());
+}
+
+function isExportable(sel: Selection): boolean {
+    if (!sel.rangeCount) {
+        return false;
+    }
+    const range = sel.getRangeAt(0);
+    const sc = range.startContainer;
+    if (sc === range.endContainer && (sc.parentNode as HTMLElement).id === 'innerdocbody' &&
+            range.startOffset === 0 && range.endOffset === sc.childNodes.length) {
+        // whole line selected by double click
+        return true;
+    }
+    const selStr = sel.toString();
+    if (selStr.indexOf('\n') === -1) {
+        return false;
+    }
+    if (selStr.match(/^\d+:\d+\.\d+,/)) {
+        return false;
+    }
+    return true;
+}
+
 function isCtrlShiftKey(event: KeyboardEvent, symb: string): boolean {
     return event.ctrlKey && event.shiftKey &&
         String.fromCharCode(event.which).toLowerCase() === symb;
+}
+
+function clearRange(start: Node, end: Node) {
+    const sel = paddoc!.getSelection()!;
+    sel.setBaseAndExtent(start, 0, end, end.childNodes.length);
+    DOMEval("pad.editbarClick('clearauthorship');");
+    sel.collapseToEnd();
 }
 
 function main(attempts: number) {
@@ -278,6 +347,35 @@ function main(attempts: number) {
         let divElem = document.createElement('div');
         divElem.innerHTML = padLines.join('<br>');
         sel.getRangeAt(0).insertNode(divElem);
+        event.preventDefault();
+    });
+    paddoc.addEventListener('copy', event => {
+        const sel = paddoc!.getSelection();
+        if (!sel || !isExportable(sel)) {
+            return;
+        }
+        let start = null;
+        let end = null;
+        let padLines = [];
+        for (let line of iterateLineRange(sel.getRangeAt(0))) {
+            if (!start) {
+                start = line;
+            }
+            end = line;
+            const text = line.textContent!;
+            const parsed = parsePadLine(text);
+            if (!parsed) {
+                alert("can't parse subtitle line\n" + text);
+                return;
+            }
+            padLines.push(parsed);
+        }
+        if (start === null || end === null) {
+            return;
+        }
+        event.clipboardData!.setData('text/plain', padLines.map(
+            l => l.toAegi('translation')).join('\r\n'));
+        clearRange(start, end);
         event.preventDefault();
     });
     console.log('Successfully set events in seamtress.user.js');
