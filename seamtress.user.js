@@ -8,25 +8,30 @@
 // @exclude     https://pony.pad.sunnysubs.com/
 // @exclude     http://pony.pad.sunnysubs.com/*/*
 // @exclude     https://pony.pad.sunnysubs.com/*/*
-// @version     0.7
+// @version     0.8
 // @run-at      document-end
 // @grant       none
 // ==/UserScript==
 "use strict";
 // This function is used to call code from pad internals via `pad` and `padeditor`,
-// which is not available from monkey extensions for security reasons.
+// which are not available from monkey extensions for security reasons.
 function DOMEval(code) {
     let script = document.createElement('script');
     script.text = code;
     document.head.appendChild(script).parentNode.removeChild(script);
 }
+function escapeHTML(str) {
+    let elem = document.createElement('pre');
+    elem.appendChild(document.createTextNode(str));
+    return elem.innerHTML;
+}
 var paddoc = null;
-// dummy variables for satisfying TypeScript in DOMEval'd functions
-var pad, padeditor;
+var rawPaste = false;
+var pad, padeditor; // dummy variables for DOMEval'd functions
 function getPadDoc() {
     try {
-        return document.querySelectorAll('iframe')[1].contentWindow.document
-            .querySelector('iframe').contentWindow.document;
+        return document.querySelector('#editorcontainer iframe')
+            .contentWindow.document.querySelector('iframe').contentWindow.document;
     }
     catch (_a) { }
     console.log('Pad document not found');
@@ -44,9 +49,6 @@ function getMagicDom(elem) {
         }
         elem = parent;
     }
-}
-function iterateAllLines(doc) {
-    return doc.querySelectorAll('#innerdocbody>div');
 }
 function* iterateLineRange(range) {
     const sc = range.startContainer;
@@ -99,14 +101,10 @@ function clearOriginal() {
         return;
     }
     const sel = doc.getSelection();
-    if (sel === null) {
-        alert('iframe not loaded');
+    if (!sel || !sel.rangeCount) {
         return;
     }
-    const iter = sel.isCollapsed ? iterateAllLines(doc)
-        : iterateLineRange(sel.getRangeAt(0));
-    sel.removeAllRanges();
-    for (let line of iter) {
+    for (let line of iterateLineRange(sel.getRangeAt(0))) {
         if (!(line instanceof HTMLElement)) {
             continue;
         }
@@ -126,8 +124,8 @@ function clearOriginal() {
         }
         sel.setBaseAndExtent(line.firstChild, 0, arrowNode, offset);
         pad.editbarClick('clearauthorship');
-        sel.removeAllRanges();
     }
+    sel.removeAllRanges();
 }
 function toggleWhitetextMode() {
     padeditor.ace.callWithAce((ace) => {
@@ -142,7 +140,7 @@ function toggleWhitetextMode() {
     });
 }
 const ZERO_STYLE = 'Default';
-const MAX_TIME_CS = 24 * 60 * 60 * 100;
+const MAX_TIME_CS = 100 * 60 * 60 * 100 - 1;
 function p0(num) {
     return (num < 10 ? '0' : '') + num;
 }
@@ -174,9 +172,8 @@ class PadLine {
         const start_min = (start_sec - start_pure_sec) / 60;
         const len_pure_cs = this.len_cs % 100;
         const len_sec = (this.len_cs - len_pure_cs) / 100;
-        return `${p0(start_min)}:${p0(start_pure_sec)}.${p0(start_pure_cs)},` +
-            `${len_sec}.${p0(len_pure_cs)} ` +
-            `${this.style}: ${this.original} → ${this.translation}`;
+        return escapeHTML(`${p0(start_min)}:${p0(start_pure_sec)}.${p0(start_pure_cs)},` +
+            `${len_sec}.${p0(len_pure_cs)} ${this.style}: ${this.original} → ${this.translation}`);
     }
     toAegi(out) {
         const end_cs = this.start_cs + this.len_cs;
@@ -203,9 +200,9 @@ function parseAssLine(line) {
         return null;
     }
     let l = new PadLine(timing[0], timing[1] - timing[0], match[9], match[11]);
-    const actor = match[10];
-    const actorInText = match[12];
     if (l.style === ZERO_STYLE) {
+        const actor = match[10];
+        const actorInText = match[12];
         if (actor.length) {
             l.style = expandAlias(actor);
         }
@@ -284,14 +281,21 @@ function main(attempts) {
     }
     paddoc.addEventListener('keydown', event => {
         if (isCtrlShiftKey(event, 'f')) {
-            DOMEval([getPadDoc, getMagicDom, iterateAllLines, iterateLineRange,
+            DOMEval([getPadDoc, getMagicDom, iterateLineRange,
                 getArrowNode, clearOriginal].join(';') + ";clearOriginal();");
         }
         if (isCtrlShiftKey(event, 'y')) {
             DOMEval([toggleWhitetextMode].join(';') + ";toggleWhitetextMode();");
         }
+        if (isCtrlShiftKey(event, 'v')) {
+            rawPaste = true;
+        }
     });
     paddoc.addEventListener('paste', event => {
+        if (rawPaste) {
+            rawPaste = false;
+            return;
+        }
         if (!event.clipboardData) {
             alert('Clipboard not detected!');
             return;
