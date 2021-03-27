@@ -37,30 +37,24 @@ function getPadDoc() {
     console.log('Pad document not found');
     return null;
 }
-function getMagicDom(elem) {
-    while (true) {
-        const parent = elem.parentNode;
-        if (!parent) {
-            return null;
-        }
-        if (elem.tagName === 'DIV' &&
-            parent.id === 'innerdocbody') {
+function getMagicDom(container, offset) {
+    let parent = container;
+    let elem = container.childNodes[offset];
+    while (parent) {
+        if (parent.id === 'innerdocbody' &&
+            elem.tagName === 'DIV') {
             return elem;
         }
         elem = parent;
+        parent = elem.parentNode;
     }
+    return null;
 }
 function* iterateLineRange(range) {
-    const sc = range.startContainer;
-    const start = sc.id === 'innerdocbody' ? sc.firstChild : getMagicDom(sc);
-    if (!start) {
-        alert("can't find start line");
-        return;
-    }
-    const ec = range.endContainer;
-    const end = ec.id === 'innerdocbody' ? ec.lastChild : getMagicDom(ec);
-    if (!end) {
-        alert("can't find end line");
+    const start = getMagicDom(range.startContainer, range.startOffset);
+    const end = getMagicDom(range.endContainer, Math.max(0, range.endOffset - 1));
+    if (!start || !end) {
+        alert("iterateLineRange: undefined range");
         return;
     }
     let line = start;
@@ -247,6 +241,11 @@ function isExportable(sel) {
     if (sc === range.endContainer && sc.parentNode.id === 'innerdocbody' &&
         range.startOffset === 0 && range.endOffset === sc.childNodes.length) {
         // whole line selected by double click
+        return true;
+    }
+    if (sc === range.endContainer && sc.id === 'innerdocbody' &&
+        range.endOffset - range.startOffset === 1) {
+        // whole line selected by double click to the area outside of the line
         return true;
     }
     const selStr = sel.toString();

@@ -47,31 +47,25 @@ function getPadDoc(): OptDoc {
     return null;
 }
 
-function getMagicDom(elem: Node): null | Node {
-    while (true) {
-        const parent = elem.parentNode;
-        if (!parent) {
-            return null;
-        }
-        if ((elem as HTMLElement).tagName === 'DIV' &&
-            (parent as HTMLElement).id === 'innerdocbody') {
+function getMagicDom(container: Node, offset: number): null | Node {
+    let parent: null | Node = container;
+    let elem: Node = container.childNodes[offset];
+    while (parent) {
+        if ((parent as HTMLElement).id === 'innerdocbody' &&
+            (elem as HTMLElement).tagName === 'DIV') {
             return elem;
         }
         elem = parent;
+        parent = elem.parentNode;
     }
+    return null;
 }
 
 function* iterateLineRange(range: Range): Generator<Node> {
-    const sc = range.startContainer;
-    const start = (sc as HTMLElement).id === 'innerdocbody' ? sc.firstChild : getMagicDom(sc);
-    if (!start) {
-        alert("can't find start line");
-        return;
-    }
-    const ec = range.endContainer;
-    const end = (ec as HTMLElement).id === 'innerdocbody' ? ec.lastChild : getMagicDom(ec);
-    if (!end) {
-        alert("can't find end line");
+    const start = getMagicDom(range.startContainer, range.startOffset);
+    const end = getMagicDom(range.endContainer, Math.max(0, range.endOffset - 1));
+    if (!start || !end) {
+        alert("iterateLineRange: undefined range");
         return;
     }
     let line: Node = start;
@@ -275,6 +269,11 @@ function isExportable(sel: Selection): boolean {
     if (sc === range.endContainer && (sc.parentNode as HTMLElement).id === 'innerdocbody' &&
             range.startOffset === 0 && range.endOffset === sc.childNodes.length) {
         // whole line selected by double click
+        return true;
+    }
+    if (sc === range.endContainer && (sc as HTMLElement).id === 'innerdocbody' &&
+            range.endOffset - range.startOffset === 1) {
+        // whole line selected by double click to the area outside of the line
         return true;
     }
     const selStr = sel.toString();
